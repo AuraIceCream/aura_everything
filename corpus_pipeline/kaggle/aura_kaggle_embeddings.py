@@ -22,6 +22,7 @@ import sqlite3
 import tarfile
 import time
 from collections import Counter, defaultdict
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -434,6 +435,16 @@ def _expanded_member_candidates(bundle_dir: Path, member_name: str) -> list[Path
     return list(dict.fromkeys(candidates))
 
 
+@lru_cache(maxsize=64)
+def _expanded_bundle_directories(input_root_text: str, expanded_name: str) -> tuple[Path, ...]:
+    """Locate a Kaggle-expanded bundle once per process, not once per shard."""
+
+    input_root = Path(input_root_text)
+    return tuple(
+        directory for directory in input_root.rglob(expanded_name) if directory.is_dir()
+    )
+
+
 def _task_rows(input_root: Path, task: dict[str, Any], tar_cache: dict[str, tarfile.TarFile]) -> Iterator[dict[str, Any]]:
     bundle_name = task["bundle"]
     # Kaggle may automatically expand an uploaded ``bundle-000.tar`` into a
@@ -441,9 +452,7 @@ def _task_rows(input_root: Path, task: dict[str, Any], tar_cache: dict[str, tarf
     # well as the original TAR so users never have to extract inputs manually.
     expanded_name = Path(bundle_name).stem if bundle_name.lower().endswith(".tar") else bundle_name
     expanded_matches: list[Path] = []
-    expanded_directories = [
-        directory for directory in input_root.rglob(expanded_name) if directory.is_dir()
-    ]
+    expanded_directories = _expanded_bundle_directories(str(input_root), expanded_name)
     for directory in expanded_directories:
         if not directory.is_dir():
             continue
@@ -493,6 +502,8 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         for task in manifest["jobs"][0]["tasks"]:
             for row in _task_rows(input_root, task, tar_cache):
                 texts.append(str(row["text"]))
+                if len(texts) % 2_000 == 0:
+                    print(f"benchmark loaded {len(texts):,}/{args.chunks:,} chunks", flush=True)
                 if len(texts) >= args.chunks:
                     break
             if len(texts) >= args.chunks:
@@ -502,6 +513,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             handle.close()
     if len(texts) < 100:
         raise ValueError("Benchmark requires at least 100 chunks")
+    print(f"benchmark encoding {len(texts):,} chunks on {args.device}", flush=True)
     warmup = min(32, len(texts))
     _encode(model, texts[:warmup], args.batch_size)
     started = time.perf_counter()
