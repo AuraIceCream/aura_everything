@@ -422,6 +422,15 @@ def _expanded_member_candidates(bundle_dir: Path, member_name: str) -> list[Path
                 expected.with_suffix(".part"),
             ]
         )
+        # Kaggle's Data Explorer may recursively treat every inner ``.gz`` as
+        # another archive. In the mounted input that becomes a shard directory
+        # containing one decompressed ``.jsonl`` or ``.part`` file.
+        container_candidates = [expected, without_gzip]
+        if without_gzip.name.endswith(".jsonl"):
+            container_candidates.append(without_gzip.with_suffix(""))
+        for container in container_candidates:
+            if container.is_dir():
+                candidates.extend(path for path in container.rglob("*") if path.is_file())
     return list(dict.fromkeys(candidates))
 
 
@@ -432,7 +441,10 @@ def _task_rows(input_root: Path, task: dict[str, Any], tar_cache: dict[str, tarf
     # well as the original TAR so users never have to extract inputs manually.
     expanded_name = Path(bundle_name).stem if bundle_name.lower().endswith(".tar") else bundle_name
     expanded_matches: list[Path] = []
-    for directory in input_root.rglob(expanded_name):
+    expanded_directories = [
+        directory for directory in input_root.rglob(expanded_name) if directory.is_dir()
+    ]
+    for directory in expanded_directories:
         if not directory.is_dir():
             continue
         expanded_matches.extend(
@@ -455,8 +467,9 @@ def _task_rows(input_root: Path, task: dict[str, Any], tar_cache: dict[str, tarf
         if len(matches) != 1:
             raise ValueError(
                 f"Expected either {bundle_name} or expanded directory {expanded_name} "
-                f"under {input_root}; found neither. The attached Dataset version may not "
-                "match embedding-manifest.json."
+                f"under {input_root}; found {len(expanded_directories)} expanded bundle "
+                f"directories but no readable form of member {task['member']}. The attached "
+                "Dataset version or Kaggle archive layout may not match the manifest."
             )
         handle = tarfile.open(matches[0], "r")
         tar_cache[bundle_name] = handle

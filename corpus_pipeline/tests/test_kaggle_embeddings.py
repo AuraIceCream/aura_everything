@@ -151,6 +151,27 @@ class KaggleEmbeddingRoundTripTests(unittest.TestCase):
                 rows = list(KAGGLE._task_rows(root, task, {}))
                 self.assertEqual(rows, [{"text": mounted_name}])
 
+    def test_reads_kaggle_recursively_expanded_gzip_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shard = (
+                root
+                / "bundle-000"
+                / "chunks"
+                / "wikipedia_biology"
+                / "sample.jsonl"
+            )
+            shard.mkdir(parents=True)
+            (shard / "sample.part").write_text(
+                json.dumps({"text": "nested Kaggle archive"}) + "\n", encoding="utf-8"
+            )
+            task = {
+                "bundle": "bundle-000.tar",
+                "member": "chunks/wikipedia_biology/sample.jsonl.gz",
+            }
+            rows = list(KAGGLE._task_rows(root, task, {}))
+            self.assertEqual(rows, [{"text": "nested Kaggle archive"}])
+
 
 if __name__ == "__main__":
     unittest.main()
