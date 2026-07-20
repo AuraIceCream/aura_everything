@@ -396,27 +396,57 @@ def _encode(model: Any, texts: list[str], batch_size: int) -> tuple[Any, int]:
             print(f"CUDA OOM: retrying with batch_size={active_batch}", flush=True)
 
 
+def _json_rows_from_mounted_file(path: Path) -> Iterator[dict[str, Any]]:
+    """Read JSONL whether Kaggle kept gzip or expanded/renamed the member."""
+
+    with path.open("rb") as probe:
+        is_gzip = probe.read(2) == b"\x1f\x8b"
+    opener = gzip.open if is_gzip else open
+    with opener(path, "rt", encoding="utf-8") as text:
+        for line in text:
+            if line.strip():
+                yield json.loads(line)
+
+
+def _expanded_member_candidates(bundle_dir: Path, member_name: str) -> list[Path]:
+    expected = bundle_dir / member_name
+    candidates = [expected]
+    if expected.name.endswith(".gz"):
+        without_gzip = expected.with_suffix("")
+        candidates.extend(
+            [
+                without_gzip,
+                expected.with_name(expected.name + ".part"),
+                without_gzip.with_name(without_gzip.name + ".part"),
+                # Some archive processors replace only the final suffix.
+                expected.with_suffix(".part"),
+            ]
+        )
+    return list(dict.fromkeys(candidates))
+
+
 def _task_rows(input_root: Path, task: dict[str, Any], tar_cache: dict[str, tarfile.TarFile]) -> Iterator[dict[str, Any]]:
     bundle_name = task["bundle"]
     # Kaggle may automatically expand an uploaded ``bundle-000.tar`` into a
     # directory named ``bundle-000``. Support that mounted representation as
     # well as the original TAR so users never have to extract inputs manually.
     expanded_name = Path(bundle_name).stem if bundle_name.lower().endswith(".tar") else bundle_name
-    expanded_matches = [
-        path
-        for path in input_root.rglob(expanded_name)
-        if path.is_dir() and (path / task["member"]).is_file()
-    ]
+    expanded_matches: list[Path] = []
+    for directory in input_root.rglob(expanded_name):
+        if not directory.is_dir():
+            continue
+        expanded_matches.extend(
+            candidate
+            for candidate in _expanded_member_candidates(directory, task["member"])
+            if candidate.is_file()
+        )
     if expanded_matches:
         if len(expanded_matches) != 1:
             raise ValueError(
                 f"Expected one expanded {expanded_name} containing {task['member']} "
                 f"under {input_root}; found {len(expanded_matches)}"
             )
-        with gzip.open(expanded_matches[0] / task["member"], "rt", encoding="utf-8") as text:
-            for line in text:
-                if line.strip():
-                    yield json.loads(line)
+        yield from _json_rows_from_mounted_file(expanded_matches[0])
         return
 
     handle = tar_cache.get(bundle_name)

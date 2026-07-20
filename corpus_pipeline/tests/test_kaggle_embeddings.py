@@ -135,6 +135,22 @@ class KaggleEmbeddingRoundTripTests(unittest.TestCase):
             rows = list(KAGGLE._task_rows(root, task, {}))
             self.assertEqual(rows, [{"text": "cell biology"}])
 
+    def test_reads_kaggle_expanded_and_part_member_names(self) -> None:
+        for mounted_name in ("sample.jsonl", "sample.jsonl.part"):
+            with self.subTest(mounted_name=mounted_name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                expanded = root / "bundle-000" / "chunks" / "wikipedia_biology"
+                expanded.mkdir(parents=True)
+                (expanded / mounted_name).write_text(
+                    json.dumps({"text": mounted_name}) + "\n", encoding="utf-8"
+                )
+                task = {
+                    "bundle": "bundle-000.tar",
+                    "member": "chunks/wikipedia_biology/sample.jsonl.gz",
+                }
+                rows = list(KAGGLE._task_rows(root, task, {}))
+                self.assertEqual(rows, [{"text": mounted_name}])
+
 
 if __name__ == "__main__":
     unittest.main()
