@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aura-bio-corpus"
+version = "0.1.0"
+description = "Resumable, provenance-first acquisition pipeline for the AURA-Bio corpus"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+aura-corpus = "aura_corpus.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["aura_corpus*"]
+

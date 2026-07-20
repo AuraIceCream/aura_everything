@@ -1,0 +1,133 @@
+[pipeline]
+corpus_root = "D:/aura_data/AURA-Bio-Corpus"
+output_root = "G:/aura_llm/AURA-Bio-Processed"
+chunk_root = "D:/aura_data/AURA-Bio-Processed/02_chunks"
+min_document_chars = 200
+paragraph_dedup_min_chars = 180
+# BGE Base v1.5 has a 512-token input ceiling. These are model-token counts,
+# not whitespace-word estimates, and prevent silent embedding truncation.
+chunk_min_tokens = 320
+chunk_target_tokens = 450
+chunk_max_tokens = 510
+chunk_overlap_tokens = 64
+min_chunk_output_tokens = 32
+embedding_model = "BAAI/bge-base-en-v1.5"
+embedding_batch_size = 32
+
+# Structured/filtered representations are deliberately preferred over their
+# raw archives. This prevents PubMed and LitArch from being indexed twice.
+[[sources]]
+id = "pubmed_filtered"
+category = "literature"
+parser = "pubmed_jsonl"
+patterns = ["01_Literature/normalized/pubmed_filtered/*.jsonl.gz"]
+license_id = "NLM-PubMed-Terms"
+priority = 1000
+trusted_unique = true
+paragraph_dedup = false
+compression_level = 1
+
+[[sources]]
+id = "pmc_oa_comm_xml"
+category = "literature"
+parser = "jats_xml"
+patterns = ["01_Literature/raw/pmc_oa_comm_xml/*.xml"]
+license_id = "PMC-OA-commercial-subset"
+priority = 500
+trusted_unique = true
+paragraph_dedup = false
+compression_level = 1
+
+[[sources]]
+id = "wikipedia_biology"
+category = "reference"
+parser = "wikipedia_json"
+patterns = ["01_Literature/raw/wikipedia_biology/*.json"]
+license_id = "CC-BY-SA-4.0"
+priority = 100
+trusted_unique = true
+paragraph_dedup = false
+compression_level = 1
+
+[[sources]]
+id = "nlm_litarch_biology"
+category = "textbook"
+parser = "jats_xml"
+patterns = [
+  "02_Textbooks/normalized/nlm_litarch_biology/**/*.nxml",
+  "02_Textbooks/normalized/nlm_litarch_biology/**/*.txt",
+  "02_Textbooks/normalized/nlm_litarch_biology/**/*.csv",
+  "02_Textbooks/normalized/nlm_litarch_biology/**/*.tsv",
+]
+license_id = "NLM-LitArch-item-license"
+priority = 200
+compression_level = 3
+
+[[sources]]
+id = "biolibretexts_catalog"
+category = "textbook"
+parser = "pdf"
+patterns = ["02_Textbooks/raw/biolibretexts_catalog/*.pdf"]
+license_id = "item-level-CC"
+priority = 110
+compression_level = 3
+
+[[sources]]
+id = "mesh_descriptors"
+category = "knowledge_base"
+parser = "mesh_xml"
+patterns = ["03_KnowledgeBases/normalized/mesh_descriptors/desc2026"]
+license_id = "NLM-data-terms"
+priority = 20
+trusted_unique = true
+paragraph_dedup = false
+structured_cleaning = true
+compression_level = 1
+
+[[sources]]
+id = "uniprot_sprot"
+category = "knowledge_base"
+parser = "uniprot_dat"
+patterns = ["03_KnowledgeBases/normalized/uniprot_sprot/*.dat"]
+license_id = "CC-BY-4.0"
+priority = 40
+trusted_unique = true
+paragraph_dedup = false
+structured_cleaning = true
+compression_level = 1
+
+[[sources]]
+id = "gene_ontology"
+category = "knowledge_base"
+parser = "obo"
+patterns = ["03_KnowledgeBases/raw/gene_ontology/*.obo"]
+license_id = "CC-BY-4.0"
+priority = 10
+trusted_unique = true
+paragraph_dedup = false
+structured_cleaning = true
+compression_level = 1
+
+[[sources]]
+id = "reactome_summaries"
+category = "knowledge_base"
+parser = "reactome_tsv"
+patterns = ["03_KnowledgeBases/raw/reactome_summaries/*.txt"]
+license_id = "CC0-1.0"
+priority = 30
+trusted_unique = true
+paragraph_dedup = false
+structured_cleaning = true
+compression_level = 1
+
+[[sources]]
+id = "pubmedqa_labeled"
+category = "qa_training"
+parser = "pubmedqa_json"
+patterns = ["04_QA/raw/pubmedqa_labeled/*.json"]
+license_id = "MIT-dataset"
+priority = 50
+trusted_unique = true
+paragraph_dedup = false
+structured_cleaning = true
+compression_level = 1

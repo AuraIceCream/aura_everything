@@ -1,0 +1,7 @@
+faiss-cpu<2,>=1.8
+ftfy<7,>=6.2
+mwparserfromhell<1,>=0.6.6
+numpy<3,>=1.26
+pypdf<7,>=5
+sentence-transformers<6,>=3
+transformers<6,>=4.44

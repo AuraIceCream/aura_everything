@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aura-bio-processing"
+version = "0.1.0"
+description = "Streaming preparation and hybrid indexing pipeline for AURA-Bio"
+requires-python = ">=3.11"
+dependencies = [
+  "faiss-cpu>=1.8,<2",
+  "ftfy>=6.2,<7",
+  "mwparserfromhell>=0.6.6,<1",
+  "numpy>=1.26,<3",
+  "pypdf>=5,<7",
+  "sentence-transformers>=3,<6",
+  "transformers>=4.44,<6",
+  "wcwidth>=0.2.13,<1",
+]
+
+[project.scripts]
+aura-process = "aura_bio_pipeline.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,197 @@
+[global]
+raw_target_bytes = 50000000000
+policy = "Only official bulk endpoints and explicitly reviewed licences are permitted."
+
+[[sources]]
+id = "biolibretexts_catalog"
+name = "Biology LibreTexts bookshelf candidate catalog"
+category = "02_Textbooks"
+discovery = "catalog_review"
+index_url = "https://bio.libretexts.org/Bookshelves"
+candidate_regex = "^https://bio\\.libretexts\\.org/Bookshelves/[^/]+/[^/]+/?$"
+crawl_regex = "^https://bio\\.libretexts\\.org/Bookshelves(?:/[^/]+)?/?$"
+crawl_depth = 1
+crawl_delay_seconds = 5.0
+max_pages = 40
+license_id = "PER-PAGE-OPEN-LICENSE-REVIEW"
+license_url = "https://libretexts.org/terms-conditions"
+documentation_url = "https://bio.libretexts.org/Bookshelves"
+risk = "review"
+notes = "Strong OER source. Every book/page must pass detailed-licensing review; retain attribution and NC/SA/ND restrictions. Catalog crawl respects the published 5-second delay."
+
+[[sources]]
+id = "ebooksdirectory_biology_catalog"
+name = "E-Books Directory biology candidate catalog"
+category = "02_Textbooks"
+discovery = "catalog_review"
+index_url = "https://www.e-booksdirectory.com/biology.php"
+candidate_regex = "^https://www\\.e-booksdirectory\\.com/details\\.php\\?ebook=[0-9]+$"
+crawl_depth = 0
+crawl_delay_seconds = 1.0
+max_pages = 1
+license_id = "PER-ITEM-THIRD-PARTY-REVIEW"
+license_url = "https://www.e-booksdirectory.com/about.php"
+documentation_url = "https://www.e-booksdirectory.com/biology.php"
+risk = "review"
+notes = "Directory links are discovery leads, not a corpus licence. Review the author/publisher licence at the destination before downloading or training."
+
+[[sources]]
+id = "freebookcentre_biology_catalog"
+name = "FreeBookCentre biology candidate catalog"
+category = "02_Textbooks"
+discovery = "catalog_review"
+index_url = "https://www.freebookcentre.net/Biology/Biology-Books-Online.html"
+candidate_regex = "^https://www\\.freebookcentre\\.net/biology-books-download/.+\\.html$"
+crawl_regex = "^https://www\\.freebookcentre\\.net/Biology/.+-Books(?:-Online)?\\.html$"
+crawl_depth = 1
+crawl_delay_seconds = 1.0
+max_pages = 40
+license_id = "PER-ITEM-THIRD-PARTY-REVIEW"
+license_url = "https://www.freebookcentre.net/Terms.html"
+documentation_url = "https://www.freebookcentre.net/Biology/Biology-Books-Online.html"
+risk = "review"
+notes = "The site's terms require following each external author/site licence and limit materials to personal non-commercial use. Never auto-ingest linked files."
+
+[[sources]]
+id = "pubmed_baseline"
+name = "PubMed 2026 annual citation and abstract baseline"
+category = "01_Literature"
+discovery = "html_index"
+index_url = "https://ftp.ncbi.nlm.nih.gov/pubmed/baseline/"
+include_regex = "^pubmed26n[0-9]{4}\\.xml\\.gz$"
+checksum = "sidecar-md5"
+license_id = "NLM-PubMed-Terms"
+license_url = "https://ftp.ncbi.nlm.nih.gov/pubmed/baseline/README.txt"
+documentation_url = "https://pubmed.ncbi.nlm.nih.gov/download/"
+risk = "bulk"
+notes = "Citation XML; some abstracts may be copyrighted. Keep NLM attribution and version metadata."
+
+[[sources]]
+id = "pmc_oa_comm_xml"
+name = "PMC Open Access commercial-use XML via ESearch-EFetch batches"
+category = "01_Literature"
+discovery = "pmc_efetch"
+query = "(cc0_license[filter] OR cc_by_license[filter] OR cc_by-sa_license[filter] OR cc_by-nd_license[filter]) AND open_access[filter]"
+retmax = 100
+batch_size = 100
+license_id = "PMC-OA-ARTICLE-SPECIFIC"
+license_url = "https://pmc.ncbi.nlm.nih.gov/tools/openftlist/"
+documentation_url = "https://www.ncbi.nlm.nih.gov/books/NBK25499/"
+risk = "bulk"
+notes = "Uses one ESearch licence-filtered ID query and full-XML EFetch batches of 100 articles. Inspect embedded article licence/retraction metadata again during normalization."
+
+[[sources]]
+id = "wikipedia_biology"
+name = "English Wikipedia biology-category revision batches"
+category = "01_Literature"
+discovery = "mediawiki_category"
+index_url = "https://en.wikipedia.org/w/api.php"
+root_category = "Category:Biology"
+category_depth = 6
+max_articles = 250000
+batch_size = 50
+exclude_category_regex = "Wikipedia|WikiProject|articles|templates|stubs|maintenance|tracking|navigation|portals|lists|by country|by year"
+exclude_title_regex = "^(Lists? of|Outline of|Index of|Bibliography of)|\\(disambiguation\\)$"
+request_delay_seconds = 1.25
+license_id = "CC-BY-SA-4.0"
+license_url = "https://foundation.wikimedia.org/wiki/Policy:Terms_of_Use"
+documentation_url = "https://www.mediawiki.org/wiki/API:Categorymembers"
+risk = "bulk"
+notes = "Category:Biology traversal targeting a multi-gigabyte biology slice; stores current wikitext, revision IDs, timestamps, canonical URLs, titles, and licence metadata in 50-page JSON batches. Use the corpus byte cap and monitor relevance/size."
+
+[[sources]]
+id = "wikibooks_en"
+name = "English Wikibooks current article dump"
+category = "02_Textbooks"
+discovery = "html_index"
+index_url = "https://dumps.wikimedia.org/enwikibooks/latest/"
+include_regex = "^enwikibooks-latest-pages-articles-multistream\\.xml\\.bz2$"
+checksum_manifest_url = "https://dumps.wikimedia.org/enwikibooks/latest/enwikibooks-latest-sha1sums.txt"
+license_id = "CC-BY-SA-4.0"
+license_url = "https://foundation.wikimedia.org/wiki/Policy:Terms_of_Use"
+documentation_url = "https://meta.wikimedia.org/wiki/Data_dumps/What%27s_available_for_download"
+risk = "bulk"
+notes = "Filter to biology and life-science books after download."
+
+[[sources]]
+id = "nlm_litarch_biology"
+name = "NLM LitArch OA biology book packages"
+category = "02_Textbooks"
+discovery = "litarch_catalog"
+index_url = "https://ftp.ncbi.nlm.nih.gov/pub/litarch/file_list.csv"
+base_url = "https://ftp.ncbi.nlm.nih.gov/pub/litarch/"
+selection_regex = "biology|biological|cell|genetic|genomic|molecular|microbi|immun|anatom|physiolog|neurosc|biochem|biotechn|ecolog|evolution|botan|zoolog|protein|gene|DNA|RNA"
+license_id = "NLM-LitArch-ARTICLE-SPECIFIC"
+license_url = "https://www.ncbi.nlm.nih.gov/sites/books/about/ftp/"
+documentation_url = "https://www.ncbi.nlm.nih.gov/sites/books/about/ftp/"
+risk = "bulk"
+notes = "Title-filtered catalogue; preserve the licence embedded in each book package."
+
+[[sources]]
+id = "uniprot_sprot"
+name = "UniProtKB reviewed Swiss-Prot records"
+category = "03_KnowledgeBases"
+discovery = "direct"
+url = "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.dat.gz"
+license_id = "CC-BY-4.0"
+license_url = "https://www.uniprot.org/help/license"
+documentation_url = "https://www.uniprot.org/help/downloads"
+risk = "bulk"
+notes = "Reviewed records only; deliberately excludes TrEMBL."
+
+[[sources]]
+id = "gene_ontology"
+name = "Gene Ontology basic ontology"
+category = "03_KnowledgeBases"
+discovery = "direct"
+url = "https://purl.obolibrary.org/obo/go/go-basic.obo"
+license_id = "CC-BY-4.0"
+license_url = "https://geneontology.org/docs/go-citation-policy/"
+documentation_url = "https://geneontology.org/docs/download-ontology/"
+risk = "small"
+
+[[sources]]
+id = "reactome_summaries"
+name = "Reactome pathway summaries"
+category = "03_KnowledgeBases"
+discovery = "direct"
+url = "https://reactome.org/download/current/pathway2summation.txt"
+license_id = "CC0-1.0"
+license_url = "https://reactome.org/license"
+documentation_url = "https://reactome.org/download-data"
+risk = "small"
+
+[[sources]]
+id = "mesh_descriptors"
+name = "2026 Medical Subject Headings descriptors"
+category = "03_KnowledgeBases"
+discovery = "direct"
+url = "https://nlmpubs.nlm.nih.gov/projects/mesh/MESH_FILES/xmlmesh/desc2026.gz"
+license_id = "NLM-MeSH-Terms"
+license_url = "https://www.nlm.nih.gov/databases/download/terms_and_conditions_mesh.html"
+documentation_url = "https://www.nlm.nih.gov/databases/download/mesh.html"
+risk = "small"
+
+[[sources]]
+id = "pubmedqa_labeled"
+name = "PubMedQA expert-labeled question answering set"
+category = "04_QA"
+discovery = "direct"
+url = "https://raw.githubusercontent.com/pubmedqa/pubmedqa/master/data/ori_pqal.json"
+license_id = "MIT"
+license_url = "https://github.com/pubmedqa/pubmedqa/blob/master/LICENSE"
+documentation_url = "https://github.com/pubmedqa/pubmedqa"
+risk = "small"
+notes = "Keep PMID provenance and the repository citation; underlying PubMed text remains subject to NLM/PubMed terms."
+
+[[sources]]
+id = "pubmedqa_test_ground_truth"
+name = "PubMedQA held-out test ground truth"
+category = "04_QA"
+discovery = "direct"
+url = "https://raw.githubusercontent.com/pubmedqa/pubmedqa/master/data/test_ground_truth.json"
+license_id = "MIT"
+license_url = "https://github.com/pubmedqa/pubmedqa/blob/master/LICENSE"
+documentation_url = "https://github.com/pubmedqa/pubmedqa"
+risk = "small"
+notes = "Evaluation-only asset; never mix this file into training or synthetic QA generation."

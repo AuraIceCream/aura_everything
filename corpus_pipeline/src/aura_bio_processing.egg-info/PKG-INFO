@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: aura-bio-processing
+Version: 0.1.0
+Summary: Streaming preparation and hybrid indexing pipeline for AURA-Bio
+Requires-Python: >=3.11
+Requires-Dist: faiss-cpu<2,>=1.8
+Requires-Dist: ftfy<7,>=6.2
+Requires-Dist: mwparserfromhell<1,>=0.6.6
+Requires-Dist: numpy<3,>=1.26
+Requires-Dist: pypdf<7,>=5
+Requires-Dist: sentence-transformers<6,>=3
+Requires-Dist: transformers<6,>=4.44

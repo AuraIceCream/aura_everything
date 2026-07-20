@@ -1,0 +1,5 @@
+.env
+*.part
+__pycache__/
+*.py[cod]
+.cache/
