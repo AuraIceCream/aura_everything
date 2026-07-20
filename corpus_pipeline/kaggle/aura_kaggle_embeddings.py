@@ -398,11 +398,36 @@ def _encode(model: Any, texts: list[str], batch_size: int) -> tuple[Any, int]:
 
 def _task_rows(input_root: Path, task: dict[str, Any], tar_cache: dict[str, tarfile.TarFile]) -> Iterator[dict[str, Any]]:
     bundle_name = task["bundle"]
+    # Kaggle may automatically expand an uploaded ``bundle-000.tar`` into a
+    # directory named ``bundle-000``. Support that mounted representation as
+    # well as the original TAR so users never have to extract inputs manually.
+    expanded_name = Path(bundle_name).stem if bundle_name.lower().endswith(".tar") else bundle_name
+    expanded_matches = [
+        path
+        for path in input_root.rglob(expanded_name)
+        if path.is_dir() and (path / task["member"]).is_file()
+    ]
+    if expanded_matches:
+        if len(expanded_matches) != 1:
+            raise ValueError(
+                f"Expected one expanded {expanded_name} containing {task['member']} "
+                f"under {input_root}; found {len(expanded_matches)}"
+            )
+        with gzip.open(expanded_matches[0] / task["member"], "rt", encoding="utf-8") as text:
+            for line in text:
+                if line.strip():
+                    yield json.loads(line)
+        return
+
     handle = tar_cache.get(bundle_name)
     if handle is None:
-        matches = list(input_root.rglob(bundle_name))
+        matches = [path for path in input_root.rglob(bundle_name) if path.is_file()]
         if len(matches) != 1:
-            raise ValueError(f"Expected one {bundle_name} under {input_root}; found {len(matches)}")
+            raise ValueError(
+                f"Expected either {bundle_name} or expanded directory {expanded_name} "
+                f"under {input_root}; found neither. The attached Dataset version may not "
+                "match embedding-manifest.json."
+            )
         handle = tarfile.open(matches[0], "r")
         tar_cache[bundle_name] = handle
     member = handle.extractfile(task["member"])

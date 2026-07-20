@@ -119,6 +119,22 @@ class KaggleEmbeddingRoundTripTests(unittest.TestCase):
             )
             self.assertEqual(marker["source_chunk_file"], str(chunk_path))
 
+    def test_reads_kaggle_auto_expanded_tar_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            expanded = root / "bundle-000" / "chunks" / "wikipedia_biology"
+            expanded.mkdir(parents=True)
+            member = expanded / "sample.jsonl.gz"
+            with gzip.open(member, "wt", encoding="utf-8") as handle:
+                handle.write(json.dumps({"text": "cell biology"}) + "\n")
+
+            task = {
+                "bundle": "bundle-000.tar",
+                "member": "chunks/wikipedia_biology/sample.jsonl.gz",
+            }
+            rows = list(KAGGLE._task_rows(root, task, {}))
+            self.assertEqual(rows, [{"text": "cell biology"}])
+
 
 if __name__ == "__main__":
     unittest.main()
