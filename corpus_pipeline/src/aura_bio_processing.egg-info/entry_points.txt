@@ -1,2 +1,0 @@
-[console_scripts]
-aura-process = aura_bio_pipeline.cli:main

@@ -1,6 +1,7 @@
 import type {
   Capabilities,
   CorpusStatus,
+  EvaluationSummary,
   HealthStatus,
   RetrievalMode,
   RetrievalResponse,
@@ -8,7 +9,7 @@ import type {
   RunRequest,
   RunStreamEvent,
 } from "../types";
-import { streamDemoRun } from "./mock-data";
+import { evaluationSummary as demoEvaluation, streamDemoRun } from "./mock-data";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 export const USE_MOCKS = import.meta.env.VITE_USE_MOCKS !== "false";
@@ -26,6 +27,10 @@ export const api = {
   health: () => request<HealthStatus>("/api/v1/health"),
   capabilities: () => request<Capabilities>("/api/v1/capabilities"),
   corpusStatus: () => request<CorpusStatus>("/api/v1/corpus/status"),
+  evaluationSummary: (): Promise<EvaluationSummary> =>
+    USE_MOCKS
+      ? Promise.resolve(demoEvaluation)
+      : request<EvaluationSummary>("/api/v1/evaluation/summary"),
   createRun: (payload: RunRequest) =>
     request<{ run_id: string; status: string }>("/api/v1/runs", {
       method: "POST",

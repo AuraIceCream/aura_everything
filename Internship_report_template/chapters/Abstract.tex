@@ -1,0 +1,62 @@
+\begin{spacing}{1.5}
+
+Small, locally-runnable language models are attractive for education because
+they preserve privacy, remove recurring API cost, and work without permanent
+dependence on a commercial provider. When used on their own, however, they can
+state a wrong or outdated fact with the same fluent confidence as a correct
+one, and a learner has no way to tell the difference. This report presents
+\textbf{AURA-Bio}, a local-first biology tutoring system built to close that
+gap, not by training a bigger model, but by surrounding a small one
+(a 4-billion-parameter model served through Ollama) with a pipeline that
+routes each question, retrieves supporting evidence from a curated
+25\,GiB biology corpus, generates an answer against that evidence, and then
+\emph{checks} the answer before it reaches the learner.
+
+The system was built and measured, not just designed. A biology corpus of
+25.0\,GiB was assembled from nine official sources (PubMed, PMC, Wikipedia,
+UniProt, Gene Ontology, MeSH, Reactome, NLM LitArch, and open textbooks),
+verified file-by-file, deduplicated, and chunked into over ten million
+passages, of which 10,394,250 are embedded for dense retrieval and combined
+with a BM25 sparse index through reciprocal rank fusion and cross-encoder
+reranking. A rule-and-classifier router assigns each question a task type,
+biology subdomain, and learner level. Generated answers pass through a
+verification layer that recomputes rather than merely pattern-matches:
+SymPy re-derives genetics and population-genetics arithmetic, Biopython
+checks codon and sequence claims against the standard genetic code,
+\texttt{periodictable} balances stated chemical equations by element, and a
+natural-language-inference model checks whether a claim actually agrees with
+its cited evidence rather than merely sharing its vocabulary. A curated
+lexicon of 135,941 entity names drawn from the corpus's own authorities
+(Gene Ontology, MeSH, Reactome, and the encyclopaedia index) lets the system
+recognise when a question is built on something that does not exist. An
+external critic model reviews answers during development, and every stage of
+the pipeline is traced for later inspection.
+
+A 441-question benchmark, built with machine-checkable answer keys rather
+than just another second language model as judge, was used throughout to
+measure, not assume, whether each addition helped. That discipline
+produced the most important finding of the internship: the underlying
+4-billion-parameter model already answers the great majority of these
+questions correctly on its own, so raw accuracy leaves little room for any
+addition to move the needle, and the pipeline's real contribution lies
+elsewhere, in making every claim traceable, checkable, and correctly
+refused when the premise is false.
+
+The measured results appear in Chapter~4 (overall accuracy \textbf{0.889},
+statistically indistinguishable from the unaided baseline at this sample
+size,
+retrieval's headroom bounded to \textbf{six percentage points} by how much
+of the benchmark the raw model already knows, \textbf{60.5\%} of the
+pipeline's claims carrying a verifiable citation against \textbf{zero} for
+the unaided model, and a hallucination rate of \textbf{12.5\%} on
+deliberately adversarial questions for both systems). Fine-tuning the base
+model on a curated instruction set and prioritising explicit refusal
+examples over raw additional text, for reasons argued from the corpus's own
+token economics is scoped in detail and is the immediate next phase of the
+project. The
+report closes with a plan for generalising the same architecture beyond
+biology to other STEM domains through a modular plugin interface, so that
+the retrieval, verification, and critique machinery built here can be reused
+rather than rebuilt for mathematics, physics, or coding.
+
+\end{spacing}

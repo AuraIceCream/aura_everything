@@ -1,5 +1,55 @@
+# Secrets
 .env
-*.part
+.env.local
+*.env.local
+
+# Python
 __pycache__/
 *.py[cod]
+*.egg-info/
+.pytest_cache/
 .cache/
+
+# Node
+node_modules/
+dist/
+
+# Downloads in flight
+*.part
+
+# Logs
+*.log
+
+# Local agent/editor state
+.claude/
+
+# Acquired corpus and built indexes: large, regenerable, and not source.
+AURA-Bio-Corpus/
+AURA-Bio-Processed/
+AURA-Bio-Index/
+
+# Benchmark run outputs. Regenerable from the harness; the written-up findings
+# and summaries are kept in the repo instead of tens of MB of raw answers.
+aura_bio_system/benchmarks/results/
+aura_bio_system/benchmarks/gold/
+
+# Trained router artifacts, rebuilt by run_routing_eval.py --save
+aura_bio_system/benchmarks/router_model*/
+
+# LaTeX build outputs
+Internship_report_template/*.pdf
+Internship_report_template/*.aux
+Internship_report_template/*.bbl
+Internship_report_template/*.bcf
+Internship_report_template/*.blg
+Internship_report_template/*.lof
+Internship_report_template/*.log
+Internship_report_template/*.lot
+Internship_report_template/*.out
+Internship_report_template/*.run.xml
+Internship_report_template/*.synctex.gz
+Internship_report_template/*.toc
+
+# Report archives
+*.zip
+*.7z

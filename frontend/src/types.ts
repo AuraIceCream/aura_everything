@@ -22,9 +22,9 @@ export interface Citation {
   excerpt: string;
   url?: string;
   license_id: string;
-  dense_score?: number;
-  sparse_score?: number;
-  rerank_score?: number;
+  dense_score?: number | null;
+  sparse_score?: number | null;
+  rerank_score?: number | null;
   rank: number;
   source_path?: string;
 }
@@ -172,4 +172,24 @@ export interface RunSummary {
   teaching_mode: TeachingMode;
   external_critic_used: boolean;
   duration: string;
+}
+
+export interface EvaluationSystem {
+  id: string;
+  label: string;
+  detail: string;
+  srs_config: number;
+}
+
+export interface EvaluationSummary {
+  total: number;
+  by_subdomain: Record<string, number>;
+  by_task_type: Record<string, number>;
+  by_level: Record<string, number>;
+  by_difficulty: Record<string, number>;
+  numeric_items: number;
+  process_items: number;
+  adversarial_items: number;
+  systems: EvaluationSystem[];
+  metrics: string[];
 }

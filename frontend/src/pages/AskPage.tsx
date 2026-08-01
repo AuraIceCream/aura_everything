@@ -1,4 +1,4 @@
-import { Activity, ArrowUp, BookOpenCheck, BrainCircuit, ChevronRight, CircleStop, Clock3, FlaskConical, Layers3, Library, LockKeyhole, Sparkles, Workflow } from "lucide-react";
+import { Activity, ArrowUp, BookOpenCheck, BrainCircuit, ChevronRight, CircleStop, Clock3, FlaskConical, Layers3, Library, LockKeyhole, Sparkles } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { AnswerView, CitationDrawer, StatusPill } from "../components/ui";
@@ -59,7 +59,7 @@ export function AskPage() {
   }
 
   return (
-    <div className="ask-page">
+    <div className={submittedQuery ? "ask-page" : "ask-page is-landing"}>
       <section className="ask-hero">
         <div className="ask-hero__copy">
           <span className="eyebrow"><Sparkles size={14} /> Adaptive biology tutor</span>
@@ -128,39 +128,31 @@ export function AskPage() {
 }
 
 function WorkspaceSnapshot() {
-  const [selectedId, setSelectedId] = useState(demoProcesses[0].process_id);
-  const selected = demoProcesses.find((process) => process.process_id === selectedId) ?? demoProcesses[0];
-
   return (
-    <section className="workspace-snapshot" aria-label="Mock pipeline and recent runs">
+    <section className="workspace-snapshot is-compact" aria-label="Mock pipeline and recent runs">
       <div className="snapshot-pipeline">
         <header className="snapshot-heading">
-          <div><span className="eyebrow"><Activity size={13} /> Mock workspace</span><h2>Pipeline pulse</h2><p>Select a stage to inspect its current simulated state.</p></div>
-          <span className="live-indicator"><i />2 processes active</span>
+          <div><span className="eyebrow"><Activity size={13} /> Mock workspace</span><h2>Pipeline pulse</h2></div>
+          <span className="live-indicator"><i />2 active</span>
         </header>
-        <div className="pipeline-route" role="tablist" aria-label="Mock pipeline processes">
-          {demoProcesses.map((process, index) => (
-            <button key={process.process_id} type="button" role="tab" aria-selected={selectedId === process.process_id} className={selectedId === process.process_id ? "is-selected" : ""} onClick={() => setSelectedId(process.process_id)}>
-              <span className="route-index">0{index + 1}</span>
-              <span><strong>{process.label}</strong><small>{process.status}</small></span>
+        <div className="pipeline-strip" role="list" aria-label="Mock pipeline processes">
+          {demoProcesses.map((process) => (
+            <div className="pipeline-chip" role="listitem" key={process.process_id}>
+              <div><strong>{process.label}</strong><small>{process.status}</small></div>
+              <div className="chip-bar"><i style={{ width: `${process.progress}%` }} /></div>
               <b>{process.progress}%</b>
-            </button>
+            </div>
           ))}
-        </div>
-        <div className="process-focus" aria-live="polite">
-          <div className="progress-ring" style={{ background: `conic-gradient(var(--teal) ${selected.progress * 3.6}deg, #e4e9e6 0deg)` }}><span>{selected.progress}<small>%</small></span></div>
-          <div><span className="focus-status"><i />{selected.status}</span><h3>{selected.detail}</h3><p>{selected.helper}. This is preview data and will switch to the live status endpoint when the backend is connected.</p></div>
-          <Workflow size={26} />
         </div>
       </div>
 
       <aside className="snapshot-runs">
-        <header><div><span className="eyebrow">Recent demos</span><h2>Pipeline runs</h2></div><Link to="/traces/run-demo-4821">View trace <ChevronRight size={14} /></Link></header>
+        <header><div><span className="eyebrow">Recent demos</span><h2>Pipeline runs</h2></div><Link to="/traces/run-demo-4821">Trace <ChevronRight size={13} /></Link></header>
         <div className="snapshot-run-list">
           {demoRuns.map((run, index) => (
             <Link to={`/traces/${run.run_id}`} key={run.run_id}>
               <span className="run-sequence">{String(index + 1).padStart(2, "0")}</span>
-              <span><strong>{run.query}</strong><small><Clock3 size={11} />{run.duration} · {run.teaching_mode.replace("_", "-")}</small></span>
+              <span><strong>{run.query}</strong><small><Clock3 size={10} />{run.duration} · {run.teaching_mode.replace("_", "-")}</small></span>
               <span className={run.external_critic_used ? "run-route external" : "run-route"}>{run.external_critic_used ? "GLM" : "Device"}</span>
             </Link>
           ))}

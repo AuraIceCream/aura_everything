@@ -3,6 +3,7 @@ import type {
   Capabilities,
   Citation,
   CorpusStatus,
+  EvaluationSummary,
   HealthStatus,
   RetrievalMode,
   RetrievalResult,
@@ -272,6 +273,37 @@ export const corpusStatus: CorpusStatus = {
     { source_id: "uniprot_sprot", label: "UniProtKB / Swiss-Prot", source_type: "Knowledge base", documents: 575_503, chunks: 187_900, embedded_chunks: 61_000, bytes: 4_211_000_000, status: "ready", license_id: "CC-BY-4.0" },
     { source_id: "gene_ontology", label: "Gene Ontology", source_type: "Knowledge base", documents: 44_324, chunks: 38_600, embedded_chunks: 11_000, bytes: 33_000_000, status: "ready", license_id: "CC-BY-4.0" },
   ],
+};
+
+export const evaluationSummary: EvaluationSummary = {
+  total: 441,
+  by_subdomain: {
+    genetics: 37, molecular_biology: 35, biochemistry: 32, cell_biology: 31,
+    physiology: 31, botany: 26, microbiology: 25, ecology: 25, evolution: 25,
+    immunology: 25, biotechnology: 25, general_biology: 22, zoology: 21,
+    neuroscience: 21, anatomy: 20, developmental_biology: 15, bioinformatics: 15,
+    interdisciplinary: 10,
+  },
+  by_task_type: {
+    concept_explanation: 178, process_explanation: 78, comparison: 69,
+    definition: 58, factual_recall: 28, misconception_correction: 16,
+    numerical: 13, research_paper: 1,
+  },
+  by_level: {
+    undergraduate: 197, senior_secondary: 142, postgraduate: 69,
+    high_school: 23, general_public: 6, research: 4,
+  },
+  by_difficulty: { medium: 298, hard: 101, easy: 42 },
+  numeric_items: 10,
+  process_items: 12,
+  adversarial_items: 8,
+  systems: [
+    { id: "baseline", label: "Baseline model", detail: "Raw local model, no retrieval", srs_config: 1 },
+    { id: "basic_rag", label: "Basic RAG", detail: "Hybrid retrieval only, no rerank or verification", srs_config: 4 },
+    { id: "full_rag", label: "Full pipeline", detail: "Routing, rerank, verification, critique, revision", srs_config: 10 },
+    { id: "finetuned_rag", label: "Finetuned + RAG", detail: "Full pipeline on a LoRA-adapted model", srs_config: 11 },
+  ],
+  metrics: ["overall", "concept_recall", "numeric_accuracy", "process_order_accuracy", "hallucination_rate", "median_latency_ms"],
 };
 
 export function retrievalResults(mode: RetrievalMode): RetrievalResult[] {

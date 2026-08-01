@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Activity, Atom, BookOpen, Database, FlaskConical, Menu, MessageCircleQuestion, PanelLeftClose, PanelLeftOpen, Settings, X } from "lucide-react";
+import { Activity, Atom, BookOpen, Database, FlaskConical, GaugeCircle, Menu, MessageCircleQuestion, PanelLeftClose, PanelLeftOpen, Settings, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { api } from "../lib/api";
@@ -9,6 +9,7 @@ import { StatusPill } from "./ui";
 const navigation = [
   { to: "/ask", label: "Ask AURA", icon: MessageCircleQuestion },
   { to: "/retrieval", label: "Retrieval lab", icon: FlaskConical },
+  { to: "/evaluation", label: "Evaluation", icon: GaugeCircle },
   { to: "/traces/run-demo-4821", label: "Pipeline traces", icon: Activity },
   { to: "/corpus", label: "Corpus", icon: Database },
   { to: "/settings", label: "Settings", icon: Settings },

@@ -1,0 +1,446 @@
+\section{Overview}\label{4.1}
+
+This chapter reports what was measured, in the order that best explains the
+system's behaviour: how the benchmark is scored, what the raw model can do
+unaided, where a pipeline genuinely has room to help, and how each added
+component performs on its own terms.
+
+\section{How Results Are Measured}\label{4.2}
+
+Every answer in this project is scored deterministically against a
+machine-checkable answer key, never by a second language model's
+judgement (Section~\ref{2.5}). This section defines each metric exactly,
+since the tables in the rest of the chapter are read against these
+definitions.
+
+\subsection*{Concept Recall}
+
+Each benchmark question carries a set of required key phrases. A phrase
+counts as present if it appears anywhere in the answer under a
+normalisation that ignores case, markdown emphasis, British/American
+spelling variants, and simple singular/plural agreement on the final word,
+but performs no stemming and no synonym matching. For a question with
+required phrases $H$, of which $h$ are matched:
+\[
+\text{concept recall} = \frac{|h|}{|H|}
+\]
+
+\subsection*{Avoided Forbidden}
+
+A boolean flag: true if none of the question's forbidden phrases (common
+misconceptions or incorrect claims) appear in the answer under the same
+normalisation.
+
+\subsection*{Numeric Correctness}
+
+For questions with a declared numeric answer, the value stated in the
+response is extracted and compared against the key within a stated
+tolerance. A second, independent check re-derives the answer symbolically
+from the question's own premises (Hardy--Weinberg, Mendelian ratios,
+population growth, Michaelis--Menten, dilution, and carrier-probability
+questions) and corroborates the extracted value rather than replacing it.
+
+\subsection*{Order Correctness}
+
+For questions describing a biological process, the answer's stated step
+sequence is checked against a canonical ordering for that process.
+
+\subsection*{Hallucination}
+
+For the eight adversarial questions, which presuppose an entity that does
+not exist, an answer is scored as hallucinating if it either states a
+forbidden fact about the fictitious entity or fails to refuse the premise
+at all.
+
+\subsection*{Overall Score}
+
+The four checks above are combined differently depending on the question
+type, so that the score is always dominated by the check that matters most
+for that kind of question:
+
+\begin{description}
+\item[Adversarial questions] score 1 if the answer correctly refuses the
+false premise, 0 if it hallucinates.
+\item[Numeric questions] score $0.8 \times \text{correct} + 0.2 \times
+\text{concept recall}$.
+\item[Process questions] score $0.5 \times \text{concept recall} + 0.4
+\times \text{order correct} + 0.1 \times \text{avoided forbidden}$.
+\item[All other questions] score $\max(0,\ \text{concept recall} - 0.5
+\times \text{forbidden penalty})$, where the penalty applies only if a
+forbidden phrase was stated.
+\end{description}
+
+\subsection*{Verifier Decision, Confidence, and Grounding}
+
+Independently of benchmark scoring, every generated answer is passed
+through the pipeline's own verification layer (Section~\ref{4.6}), which
+reports three further quantities used throughout this chapter.
+
+\begin{description}
+\item[Decision] is \texttt{accept} unless a deterministic checker raises a
+blocking error or a claim is materially contradicted by the evidence, in
+which case it is \texttt{revise}, or unless essentially none of the
+answer's claims tie to any retrieved passage, in which case it is
+\texttt{insufficient\_evidence}.
+\item[Grounded fraction] is the share of the answer's claims that overlap
+sufficiently with at least one retrieved passage.
+\item[Confidence] is the grounded fraction minus a penalty of $0.1$ per
+blocking issue and $0.05$ per warning, clipped to $[0,1]$.
+\end{description}
+
+\subsection*{Provenance}
+
+Three further numbers describe how traceable an answer is to its sources,
+computed from the answer's inline citation markers and the passages
+supplied to the model:
+
+\begin{description}
+\item[Claim citation rate] is the fraction of factual claims carrying at
+least one inline citation.
+\item[Citation validity] is the fraction of citations that point at a
+passage plausibly containing the claim.
+\item[Unsupported assertion rate] is $1$ minus the claim citation rate:
+the share of claims with no citation at all.
+\end{description}
+
+\section{Baseline Capability and Available Headroom}\label{4.3}
+
+Before any retrieval, verification, or critique is added, the raw local
+model is measured on the full 441-question benchmark with no pipeline at
+all: no retrieved evidence, no checking, nothing but the question and the
+model.
+
+\begin{table}[h]
+\centering
+\caption{Raw model performance, no pipeline, all 441 questions}
+\label{tab:4.1}
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Metric} & \textbf{Score} \\
+\midrule
+Overall & 0.855 \\
+Numeric accuracy & 0.800 \\
+Process-order accuracy & 0.833 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The headline result is that \textbf{55\% of the 441 questions are answered
+perfectly by the unaided model}. This is the single fact that shapes most
+of the decisions described in the rest of this chapter: a model that
+already gets most of a benchmark right has very little room left for any
+addition to demonstrably improve it.
+
+To quantify that room directly, two independent measurements were made.
+First, over the 50 questions used for the ablation study in
+Section~\ref{4.11}, every required concept in the answer key was checked
+against three things: whether it was present anywhere in the passages
+retrieval returned, whether the unaided model named it, and their union.
+
+\begin{table}[h]
+\centering
+\caption{Concept coverage ceiling, 50 questions, 188 required concepts}
+\label{tab:4.2}
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Coverage of required concepts} & \textbf{Fraction} \\
+\midrule
+Present in retrieved evidence & 0.878 \\
+Known by the unaided model & 0.878 \\
+\textbf{Union of evidence and model memory} & \textbf{0.936} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Retrieval and the model's own memory overlap on roughly 82\% of what the
+benchmark asks for. Retrieval's unique contribution, the concepts the
+model does not already know, is only the remaining 5.8\%. A perfect
+pipeline could not beat the raw model here by more than about six points,
+because the questions largely ask for exactly the kind of standard biology
+knowledge a model this size has already absorbed during pretraining.
+
+Second, a separate 38-question set was constructed specifically to be
+harder for a small model: questions demanding a precise named subunit, a
+specific consensus sequence, or a specific pair of interacting enzymes, of
+the kind retrieval was expected to supply and memory was expected to
+approximate. Ten control questions on core textbook material were included
+to catch a miscalibrated set. The unaided model scored \textbf{0.955} on
+the twenty-eight deliberately hard questions and 0.975 on the ten
+controls, naming 130 of 136 required concepts without any retrieval at
+all.
+
+\textbf{Retrieval cannot beat memory at recalling material the model
+already knows.} Its genuine value lies elsewhere, and Sections~\ref{4.4}
+through~\ref{4.8} identify where.
+
+\subsection*{A Limitation of This Finding}
+
+The high baseline capability reported above is measured against this
+project's own corpus, and that corpus draws heavily on public,
+widely-available sources: Wikipedia, PubMed abstracts, open textbooks,
+Gene Ontology, and UniProt. These are exactly the kind of material
+commonly included in the training data of large language models. It is
+therefore possible that the raw model answers most of this benchmark
+correctly not because general biology knowledge is inherently easy for a
+model this size, but because a meaningful share of the corpus, or material
+closely resembling it, was already present in the model's own training
+data. This would also explain why retrieval contributes so little: there
+is little genuinely new information for retrieval to surface if the model
+has already encountered the same public sources during pretraining.
+
+The 38-question hard bank above is suggestive evidence against the
+simplest version of this concern, since obscurity alone did not defeat the
+model, but it does not rule out memorisation of the specific facts asked
+about: a fact can be rarely discussed in ordinary text while still
+appearing, close to verbatim, in a public source a pretraining run would
+have scraped. Separating ``the model has learned biology'' from ``the
+model has memorised this corpus'' would require a dedicated contamination
+probe, for instance testing whether the model can continue specific
+corpus passages verbatim, which is outside the scope of the measurements
+in this chapter. It is recorded here because it directly affects how the
+baseline-capability finding above should be read, and because a bare
+accuracy number cannot distinguish between the two explanations on its
+own.
+
+\section{Hallucination Rate}\label{4.4}
+
+Adversarial questions presuppose an entity that does not exist. Reading
+the eight adversarial answers directly, rather than relying only on the
+aggregate score:
+
+\begin{table}[h]
+\centering
+\caption{Hallucination on the 8 adversarial questions}
+\label{tab:4.3}
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{System} & \textbf{Fabricates} \\
+\midrule
+Baseline & \textbf{1 / 8} \\
+Full pipeline & \textbf{1 / 8} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Both systems correctly refuse the false premise \textbf{7 times out of
+8}, and the one genuine failure differs between them: the baseline invents
+a mechanism for a fabricated ``law'', the full pipeline invents a
+fabricated cycle name for a different question.
+
+\section{Verification Layer: Calibration Against Real Output}\label{4.6}
+
+\subsection{Deterministic Checkers}\label{4.6.2}
+
+Every deterministic checker (Table~\ref{tab:3.2}) is calibrated against
+537 real, previously generated answers, not synthetic test cases, since a
+checker that only ever sees synthetic examples can pass every test it was
+given and still misfire on real model output. Across this set the
+deterministic layer raises \textbf{zero false blocking errors}.
+
+\subsection{Contradiction Detection}\label{4.6.3}
+
+Claim support is labelled \texttt{supported}, \texttt{contradictory}, or
+\texttt{unsupported} against the retrieved evidence using a
+natural-language-inference model, measured on twelve labelled test cases
+already used to evaluate the external critic (Section~\ref{4.7}):
+
+\begin{table}[h]
+\centering
+\caption[Contradiction detection performance]{Contradiction detection
+performance. False alarms are measured on answers known to be sound.}
+\label{tab:4.4}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Method} & \textbf{Contradictions caught} & \textbf{False alarms} \\
+\midrule
+NLI entailment & \textbf{5 / 7} & \textbf{0 / 5} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The two contradictions not caught are, on inspection, correctly left to
+other checkers: a reversed process order is caught by the process-order
+checker, and a level mismatch is caught by the external critic, neither of
+which is a factual contradiction in the sense the NLI check is built to
+detect. Blocking is gated on what \emph{share} of an answer's claims are
+contradicted, not on whether any single one is, since a real teaching
+answer carries thirty or more claims and a single contradicted claim among
+them is a warning worth recording rather than grounds to force a rewrite.
+
+\section{External Critic Evaluation}\label{4.7}
+
+An external critic model (GLM \texttt{glm-4.7-flash}) reviews generated
+answers as an independent second opinion, bound to never override a
+deterministic verifier error and to only ever make the pipeline's decision
+\emph{stricter}, never looser (Section~\ref{3.7}). Measured on twelve
+labelled cases with planted errors:
+
+\begin{table}[h]
+\centering
+\caption{External critic versus the deterministic verifier alone}
+\label{tab:4.5}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Method} & \textbf{Decision acc.} & \textbf{False accepts} & \textbf{False revises} \\
+\midrule
+Deterministic verifier & 0.750 & -- & -- \\
+\textbf{GLM critic} & \textbf{0.917} & 1 / 12 & \textbf{0 / 12} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The critic's one error is a false accept, the more dangerous of the two
+possible mistakes since it lets a bad answer through rather than
+needlessly flagging a good one, and it occurs on the case involving a
+wholly fabricated organelle, which the deterministic entity-authority
+check (Section~\ref{4.8}) independently catches from the other side. Zero
+false-revises across twelve cases means the critic never penalised a sound
+answer.
+
+\section{Entity Authority Check}\label{4.8}
+
+A lexicon of 135{,}941 entity names is built from the corpus's own naming
+authorities (Gene Ontology, MeSH, Reactome, and the encyclopaedia index)
+to answer a narrow but useful question: does this corpus, across several
+independent sources, recognise this name at all? Applied to the
+\emph{question} rather than the answer, this check identifies all eight
+fabricated entities in the adversarial benchmark with a false-alarm rate
+of 0.7\% (3 of 433) on genuine questions. It is applied only on the
+question side, where it can add a cautionary note to the prompt but never
+block a real answer outright. The same lexicon applied to an answer was
+measured to be far less precise.
+
+\section{Retrieval and Generation Performance}\label{4.9}
+
+Mean retrieval latency is under one second once the index is warmed into
+the operating system's page cache, with the worst-case query measured at
+0.37 seconds. The local model runs fully GPU-offloaded at approximately
+19.6 tokens per second on the project's available hardware. A fair
+ablation requires every system under comparison to run under identical
+generation settings (response-length budget, GPU offload), which this
+project's harness enforces.
+
+\section{Learned Question Router}\label{4.10}
+
+Every question is routed on five dimensions before retrieval: task type,
+biology subdomain, learner level, teaching style, and context depth
+(Section~\ref{3.4}). Three of these dimensions, task type, subdomain, and
+learner level, are additionally served by a learned classifier: frozen
+sentence-embedding features (a general-purpose encoder and a biomedical
+one, \cite{xiao2023bge,liu2021sapbert}) combined with lexical features,
+feeding a linear or kernel classifier selected by cross-validated grid
+search on macro F1, with questions in the held-out evaluation set strictly
+excluded from training. The classifier is consulted alongside a
+rule-based router and is permitted to override it only on dimensions
+where it is measured to perform clearly better, so a hand-written rule
+remains authoritative wherever it is not.
+
+\begin{table}[h]
+\centering
+\caption[Rule-based versus learned routing]{Rule-based versus learned
+routing on the held-out set (macro F1, fifty questions never seen in
+training)}
+\label{tab:4.5b}
+\begin{tabular}{lccc}
+\hline
+\textbf{Dimension} & \textbf{Classes} & \textbf{Rules} & \textbf{Learned} \\
+\hline
+Learner level & 6 & 0.030 & \textbf{0.412} \\
+Biology subdomain & 18 & 0.417 & \textbf{0.699} \\
+Task type & 8 & 0.656 & \textbf{0.711} \\
+\hline
+\end{tabular}
+\end{table}
+
+The learned router outperforms the rules on every dimension, most sharply
+on learner level, which selects the prompt's register: a postgraduate
+question answered at the wrong level is answered in language reserved for
+school students, which plausibly costs exactly the terminology the answer
+keys reward.
+
+\section{The Ablation Comparison}\label{4.11}
+
+The core question this project set out to answer is what each layer of
+the pipeline actually contributes on top of the raw model, with every
+confounding difference in generation settings removed. All four systems
+were run on the same held-out question set under identical generation
+settings.
+
+\begin{table}[h]
+\centering
+\caption[Four-system ablation, matched settings]{Four-system ablation,
+matched settings, held-out question set. Latency is the median per answer.}
+\label{tab:4.6}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{System} & \textbf{Overall} & \textbf{Concept recall} & \textbf{Latency} \\
+\midrule
+Baseline (raw model) & 0.887 & 0.894 & 35.4\,s \\
++ Hybrid retrieval only & 0.881 & 0.891 & 64.4\,s \\
++ Rerank, verify, revise (full pipeline) & 0.889 & 0.897 & 139.6\,s \\
++ External critic & 0.892 & 0.900 & 110.4\,s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+On raw accuracy the four systems are close enough to be indistinguishable
+at this sample size, which is expected: Section~\ref{4.3} already
+establishes that the raw model's own memory covers the large majority of
+what this benchmark asks for, leaving little room for any addition to
+move the accuracy needle. That is not where this pipeline earns its
+place.
+
+\textbf{Every claim the full pipeline makes is traceable; the baseline's
+are not, at any accuracy.} Measured across the same fifty answers, 60.5\%
+of the full pipeline's factual claims carry an inline citation, and of
+those citations 65.2\% point at a passage that plausibly supports the
+claim. The raw model scores zero on both, by construction, since it names
+no source for anything it states. This is the capability an accuracy
+score cannot show and the baseline cannot produce at all: a natural-
+language-inference model that catches contradictions a word-overlap
+checker structurally could not (Section~\ref{4.6.3}), an external critic
+that catches errors the deterministic layer alone misses
+(Section~\ref{4.7}), and a corpus-derived entity lexicon that catches
+fabricated premises with a 0.7\% false-alarm rate (Section~\ref{4.8}).
+None of those depend on beating the raw model at recalling biology from
+memory, and all of them are things the raw model cannot do for itself at
+any accuracy.
+
+\section{Discussion}\label{4.12}
+
+Two conclusions follow directly from the measurements in this chapter.
+
+First, \textbf{the underlying small model was never the weak link}. It
+already answers the large majority of this benchmark's questions
+correctly unaided, and it already refuses a fabricated premise correctly
+seven times out of eight (Section~\ref{4.4}). Retrieval-augmented
+generation, built the way most published systems build it, cannot improve
+on that by much, because its unique contribution is bounded by how much
+the question set asks for that the model does not already know
+(Section~\ref{4.3}), and that bound is narrow here.
+
+Second, and more encouragingly, \textbf{the components that were built to
+check the model's work each independently earn their place}, measured on
+their own terms rather than assumed.
+
+\begin{itemize}
+\item Deterministic recomputation catches real arithmetic and factual
+errors with a demonstrated near-zero false-positive rate on real output
+(Section~\ref{4.6.2}).
+\item A natural-language-inference model catches contradictions that a
+simpler overlap heuristic structurally could not (Section~\ref{4.6.3}).
+\item An external critic model adds real error-catching capacity beyond
+the deterministic layer (Section~\ref{4.7}).
+\item A corpus-derived entity lexicon recognises a fabricated premise with
+high precision purely from local data (Section~\ref{4.8}).
+\end{itemize}
+
+None of these depend on out-scoring the raw model at answering biology
+questions from memory. They depend on being able to show, for any
+specific claim in any specific answer, whether it can be traced to a
+source, whether it agrees with that source, and whether its arithmetic is
+actually correct, which the raw model, however good its memory, cannot do
+for itself at all. Chapter~5 argues that this, and not a marginal accuracy
+gain, is the honest basis on which this project's contribution should be
+judged.

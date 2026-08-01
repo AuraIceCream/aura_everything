@@ -1,0 +1,279 @@
+\section{Overview}\label{1.1}
+
+Large language models have made it easy to get a fluent answer to almost any
+question. What they have not made easy is knowing whether that answer is
+\emph{correct}. A model with a few billion parameters, small enough to run
+on a laptop GPU with no internet connection, will answer a biology question
+just as confidently whether it is right or wrong. For a student using the
+system to revise for an exam, that is a serious problem: a wrong answer
+delivered with total confidence is worse than no answer at all, because
+there is nothing to signal that it needs checking.
+
+\textbf{AURA-Bio} (Adaptive Utility-Routed Assistant for Biology) is a
+response to that problem. It is a local-first tutoring system for biology
+that treats a small open-source language model not as the final word, but as
+one component inside a larger pipeline: the question is understood and
+routed, relevant evidence is retrieved from a large, verified biology
+corpus, an answer is drafted against that evidence, and the answer is then
+independently checked for factual support, correct terminology, sound
+process ordering, and correct arithmetic before it is shown to the
+learner. Every one of those stages is logged, so any answer can be traced
+back to exactly what evidence it used and what checks it passed or failed.
+
+Biology was chosen as the first subject not because the architecture is
+biology-specific, but because it is broad enough to exercise every part of
+the system: factual recall, multi-step processes, quantitative genetics,
+terminology, and material a small model can have large information about
+already as well as leaving gaps for the pipeline to improve the outputs upon while
+remaining a single, well-scoped domain for a first implementation. The same
+architecture is designed from the outset to extend to other technical
+subjects. Chapter~5 sets out concretely how.
+
+\subsection{What Kind of System This Is}\label{1.1.1}
+
+It is worth being precise about what AURA-Bio is not. It is not a general
+chatbot with a biology theme, and it is not a wrapper that simply pastes
+retrieved text in front of a language model and hopes for the best (a
+pattern usually called Retrieval-Augmented Generation, or RAG). The
+difference is the second half of the pipeline. A plain RAG system stops
+once it has generated an answer from retrieved context. AURA-Bio continues,
+the generated answer is verified against the evidence it was given,
+checked by tools that recompute arithmetic and re-derive genetic ratios
+rather than merely reading the model's stated answer, and, atleast during
+development, reviewed by an independent critic model before the design is
+trusted. A conventional RAG pipeline looks like this:
+
+\begin{center}
+\ttfamily
+Question $\rightarrow$ Retrieve documents $\rightarrow$ Generate answer
+\end{center}
+
+The journey of a single question through AURA-Bio, for a reader who wants
+the whole picture at a glance before the detailed treatment in
+Chapter~\ref{3}, looks like this:
+
+% Wrapped in a minipage so the diagram is never split across a page break:
+% a minipage is an unbreakable box, so LaTeX moves the whole thing to the
+% next page rather than cutting it in half.
+\begin{center}
+\begin{minipage}{\textwidth}
+\centering
+\footnotesize
+\begin{verbatim}
++----------------------------------------------------------+
+|                      USER'S QUESTION                     |
++----------------------------------------------------------+
+                             |
+                             v
++----------------------------------------------------------+
+|  ROUTE                                                   |
+|    task type . subdomain . learner level . teaching mode |
++----------------------------------------------------------+
+                             |
+                             v
++----------------------------------------------------------+
+|  RETRIEVE  (in parallel)                                 |
+|    sparse : BM25 keyword search over the corpus          |
+|    dense  : BGE semantic vector search                   |
++----------------------------------------------------------+
+                             |
+                             v
++----------------------------------------------------------+
+|  FUSE (RRF)  ->  RERANK (cross-encoder)                  |
++----------------------------------------------------------+
+                             |
+                             v
++----------------------------------------------------------+
+|  SELECT EVIDENCE   (per-source cap, prompt budget)       |
++----------------------------------------------------------+
+                             |
+                             v
++----------------------------------------------------------+
+|  DRAFT ANSWER   (local 4B model, on-device)              |
++----------------------------------------------------------+
+                             |
+                             v
++----------------------------------------------------------+
+|  VERIFY                                                  |
+|    claim support . terminology . process order .         |
+|    arithmetic / units / pathways . entity authority      |
++----------------------------------------------------------+
+                |
+                v
+        defect found? --- yes --> REVISE, then re-VERIFY
+                |                      (bounded to 2 passes)
+                no
+                |
+                v
++----------------------------------------------------------+
+|  FINAL ANSWER  --  citations, confidence, full trace     |
++----------------------------------------------------------+
+\end{verbatim}
+\end{minipage}
+\end{center}
+
+\subsection{Why This Matters for Small Models Specifically}\label{1.1.2}
+
+The largest commercial language models are, at the time of writing, quite
+good at biology out of the box. The reason a project like AURA-Bio matters
+is that not every learner, school, or institution can or should depend on a
+model that only runs on someone else's server, at someone else's cost, on
+someone else's terms of data handling. A model small enough to run on a
+four-year-old laptop GPU is the only kind of model many settings can
+actually deploy. The question this project asks is therefore precise:
+\emph{given a small model that will make mistakes, what system built around
+it makes those mistakes visible, checkable, and where possible, corrected
+without needing a bigger model?}
+
+\section{The Problem Being Addressed}\label{1.2}
+
+Small open-source language models are attractive because they can run
+locally, preserve privacy, remove recurring API costs, and function without
+permanent dependence on a commercial platform. In practice, however, they
+exhibit a recognisable set of failure modes:
+
+\begin{enumerate}
+    \item They may hallucinate facts, stating something false with the same
+        confidence as something true.
+    \item Their biology knowledge may be incomplete, outdated, or simply
+        absent for less common topics.
+    \item They may confuse similar biological terms like mitosis for meiosis,
+        an artery for a vein, transcription for translation.
+    \item They may produce explanations pitched at the wrong level: too
+        simple for an undergraduate, too technical for a school student.
+    \item They may fail to adapt their teaching style to what the learner
+        actually asked for.
+    \item They may produce answers with no indication of where the
+        information came from.
+    \item They may misrepresent a multi-step biological process, reversing
+        or omitting steps.
+    \item They may fail to communicate uncertainty, presenting a debated or
+        incomplete finding as settled fact.
+    \item They may be fluent and well-structured while being scientifically
+        wrong, which is, if anything, more dangerous than an answer that
+        reads as unconfident.
+    \item Claims that a system has \emph{improved} a model are often made
+        without any measurable evidence to support them.
+\end{enumerate}
+
+AURA-Bio addresses these limitations not by attempting to make the
+underlying model itself smarter, but by surrounding it with a structured
+reasoning and verification pipeline that catches what the model gets wrong
+and is transparent about what it does not know.
+
+\section{Core Idea}\label{1.3}
+
+The central idea investigated in this project is that:
+
+\begin{quote}
+\emph{A small local language model can become significantly more useful for
+biology education when combined with domain-specific knowledge retrieval,
+adaptive teaching, evidence checking, structured critique, and measurable
+evaluation.}
+\end{quote}
+
+Rather than treating the model as a standalone chatbot, AURA-Bio treats it
+as one component within a larger system that, for every question:
+understands what is being asked, determines the biology subdomain and the
+learner's academic level, chooses an appropriate teaching style, retrieves
+relevant evidence, reranks and filters that evidence, generates a draft
+answer, verifies its claims and terminology, uses a critic to identify
+weaknesses during development, revises the answer where a genuine defect is
+found, and returns the final answer with citations and a confidence signal, and
+logs the entire pipeline for later analysis and, eventually, for training
+data.
+
+\section{Objectives}\label{1.4}
+
+\subsection{Primary Objectives}\label{1.4.1}
+
+\begin{enumerate}
+    \item Develop a local-first biology tutoring system using an
+        open-source language model.
+    \item Rebuild a validated biology corpus (a raw-data ceiling of
+        approximately 50\,GB was set, though quality took priority over
+        reaching it) for retrieval and possible future domain adaptation.
+    \item Implement document ingestion, cleaning, deduplication, chunking,
+        and metadata generation.
+    \item Implement dense semantic retrieval using BGE embeddings and
+        sparse keyword retrieval using BM25, combined through hybrid
+        fusion.
+    \item Implement reranking to select the most useful retrieved context.
+    \item Build a biology-specific task, subdomain, learner-level, and
+        teaching-style router.
+    \item Verify biological claims against retrieved evidence, and detect
+        unsupported statements, terminology mistakes, and process
+        inconsistencies.
+    \item Use Python-based deterministic tools (SymPy, Biopython, and
+        others) for claims that can be checked by recomputation rather than
+        by pattern matching.
+    \item Use an optional external model during development for critique
+        and independent judging.
+    \item Implement a structured critique-revision loop, bounded so it
+        cannot run indefinitely.
+    \item Expose the entire pipeline through trace logs.
+    \item Evaluate the contribution of each system component using
+        ablation studies measuring what each piece actually buys, rather
+        than assuming it helps.
+    \item Build a failure-learning dataset for future fine-tuning.
+    \item Design the architecture so additional subject domains can later
+        be added as modules.
+\end{enumerate}
+
+\subsection{Secondary Objectives}\label{1.4.2}
+
+\begin{itemize}
+\item Generating revision notes, quizzes, and flashcards.
+\item Identifying learner misconceptions.
+\item Supporting exam-oriented and research style explanations.
+\item Adapting explanations across school and undergraduate levels.
+\end{itemize}
+
+\section{Scope}\label{1.5}
+
+\subsection{Initial Scope}\label{1.5.1}
+
+The first implementation focuses on biology, spanning general biology, cell
+biology, molecular biology, genetics, evolution, ecology, botany, zoology,
+microbiology, human physiology, anatomy, immunology, biochemistry,
+biotechnology, developmental biology, neuroscience basics, bioinformatics
+concepts, and introductory research-paper interpretation: eighteen
+subdomains in total, each represented in the evaluation benchmark described
+in Chapter~3.
+
+\subsection{Out of Scope for This Version}\label{1.5.2}
+
+Diagnosis of disease, treatment recommendation, prescription advice, and
+clinical decision support are explicitly out of scope. Medical and
+health-related responses are treated as educational content only, and are
+never presented as professional medical advice. Full coding assistance,
+advanced symbolic mathematics, and autonomous scientific research are also
+out of scope for this first version, though Chapter~5 discusses how the
+same architecture could later support them as separate modules.
+
+\section{Intended Users}\label{1.6}
+
+The system is designed around four user groups. \textbf{School students}
+studying biology at secondary or senior-secondary level, who need concept
+explanations, exam preparation, homework support, and misconception
+correction. \textbf{Undergraduate students} in biology, biotechnology, or
+life sciences, who need deeper mechanistic explanations, pathway detail,
+and help understanding research papers. \textbf{Teachers and teaching
+assistants}, who can use the system to generate question sets, prepare
+revision material, and identify common misconceptions. And
+\textbf{researchers or lab students}, who may use it to summarise papers,
+retrieve information from a controlled corpus, and navigate unfamiliar
+terminology.
+
+\section{Report Organisation}\label{1.7}
+
+Chapter~2 surveys the relevant background: retrieval-augmented
+generation, hallucination in language models, and the case for
+deterministic verification over using a second model as judge. Chapter~3
+describes the methodology: the corpus, the retrieval architecture, the
+routing system, the verification framework, the critic, and the
+benchmark used to measure everything. Chapter~4 presents the measured
+results, defining every scoring metric precisely before reporting what
+each component of the pipeline contributes. Chapter~5 concludes with the
+project's current status, the fine-tuning work now under way, and a
+concrete plan for generalising the architecture beyond biology.

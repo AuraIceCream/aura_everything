@@ -1,0 +1,391 @@
+\section{Overview}\label{3.1}
+
+AURA-Bio is implemented as four independent stages, each usable on its own
+and each with its own test suite: an \textbf{acquisition} package that
+downloads and validates raw source material, a \textbf{preparation}
+package that cleans, deduplicates, chunks, embeds, and indexes that
+material, a \textbf{runtime} package that answers one question at a time
+using the built indexes, and a \textbf{frontend} that exposes the runtime
+through a browser interface. This chapter describes each stage in the
+order a single question actually travels through them, since that order is
+also the order in which the system's design decisions were made and
+tested.
+
+\begin{center}
+\footnotesize\ttfamily
+\begin{tabular}{c}
+User Query \\
+$\downarrow$ \\
+Task-Type Router $\rightarrow$ Subdomain Router \\
+$\rightarrow$ Learner-Level Router \\
+$\rightarrow$ Teaching-Style Router $\rightarrow$ Context-Level Selector \\
+$\downarrow$ \\
+Dense Retrieval (BGE) \hspace{0.6cm} BM25 Retrieval (sparse) \\
+$\downarrow$ \hspace{2.2cm} $\downarrow$ \\
+Reciprocal Rank Fusion \\
+$\downarrow$ \\
+Cross-Encoder Reranking \\
+$\downarrow$ \\
+Evidence Selection (per-source cap, prompt budget) \\
+$\downarrow$ \\
+Local Biology LLM (draft generation) \\
+$\downarrow$ \\
+Biology Verification Framework \\
+(claims, terms, process, arithmetic, biochemistry) \\
+$\downarrow$ \\
+Structured Critic (development-time) \\
+$\downarrow$ \\
+Accept or Revise (bounded to two passes) \\
+$\downarrow$ \\
+Final Answer, Citations, Confidence, Full Trace
+\end{tabular}
+\end{center}
+
+\section{Corpus Acquisition and Preparation}\label{3.2}
+
+\subsection{Sources}\label{3.2.1}
+
+The retrieval corpus is built exclusively from official, licence-reviewed
+sources, so that every chunk can be traced back to a known origin with a
+known usage right. Nine sources contribute directly to retrieval, and a
+tenth (PubMedQA) is held out purely as evaluation and instruction-tuning
+material, deliberately excluded from every retrieval index so that it can
+never leak into a benchmark answer.
+
+\begin{table}[h]
+\centering
+\caption{Retrieval corpus composition by source}
+\label{tab:3.1}
+\footnotesize
+\begin{tabular}{@{}lrrl@{}}
+\toprule
+\textbf{Source} & \textbf{Shards} & \textbf{Size (GiB)} & \textbf{Dense-embedded} \\
+\midrule
+PubMed (filtered) & 1{,}262 & 21.799 & no, BM25 only \\
+PMC open-access (XML) & 1{,}231 & 2.007 & yes \\
+UniProt/Swiss-Prot & 1 & 0.707 & yes \\
+Wikipedia (biology categories) & 1{,}693 & 0.297 & yes \\
+NLM LitArch & 6{,}941 & 0.147 & yes \\
+Gene Ontology & 1 & 0.013 & yes \\
+MeSH descriptors & 1 & 0.011 & yes \\
+LibreTexts (open textbooks) & 70 & 0.004 & yes \\
+Reactome pathway summaries & 1 & 0.002 & yes \\
+\midrule
+\textbf{Total (retrieval)} & & \textbf{25.0} & \\
+PubMedQA (evaluation only) & 1 & 0.001 & excluded \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Every one of the 3{,}659 acquired files passed a full validation pass checking
+compressed-stream integrity, archive safety, XML/JSON well-formedness, and
+provider checksums where published with zero non-\texttt{ok} results
+before being admitted to the corpus.
+
+\subsection{Cleaning, Deduplication, and Chunking}\label{3.2.2}
+
+Structured sources (PubMed, PMC, UniProt, Gene Ontology, MeSH, Reactome,
+Wikipedia) carry their own stable provider identifiers, which are used
+directly as deduplication keys. Less structured sources such as open
+textbooks are deduplicated using document-, paragraph-, and chunk-level
+text fingerprints. Chunk identifiers are computed as a hash of the
+document identifier, the chunk's ordinal position, and its text, so that an
+identical chunk id can only arise from a genuinely identical passage.
+
+Retrieval chunks target 450 tokens (measured against the embedding
+model's own tokenizer) with a 64-token overlap between adjacent chunks, and
+never exceed 510 tokens. This limit was set deliberately below the
+generic 500-900 token range often recommended for chunking, because the
+BGE embedding model used here truncates silently above 512 tokens: a
+chunk built to the generic upper bound would have had text discarded from
+its embedding without any error being raised.
+
+\subsection{Data Categories}\label{3.2.3}
+
+The recovered corpus is explicitly split into four distinct uses, since
+material well-suited to retrieval is not automatically well-suited to
+training. A UniProt database record, for instance, is precise and useful
+evidence to retrieve, but training a model to imitate its field-value
+formatting would make the model worse at writing prose.
+
+\begin{itemize}
+    \item \textbf{Knowledge corpus}: the 25.0\,GiB described above, used
+        purely for retrieval.
+    \item \textbf{Instruction-tuning dataset}: a smaller, curated set of
+        question-answer pairs and explanations, described fully in
+        Section~\ref{3.9}.
+    \item \textbf{Evaluation dataset}: a completely separate 441-question
+        benchmark (Section~\ref{3.8}), never used for training.
+    \item \textbf{Failure dataset}: records of answers the verification
+        or critique layer flagged during development, retained for possible
+        future training use once a human-approval step is built.
+\end{itemize}
+
+\section{Retrieval Architecture}\label{3.3}
+
+\subsection{Dense Retrieval}\label{3.3.1}
+
+Dense retrieval represents each chunk as a 768-dimensional vector produced
+by \texttt{BAAI/bge-base-en-v1.5} \cite{xiao2023bge}, chosen for its
+balance of retrieval quality and inference cost. All 10{,}394{,}250
+retrieval-eligible chunks were embedded, producing 14.9\,GiB of vectors in
+eleven batch jobs run on Kaggle's free GPU tier, each batch recording its
+exact input range and a checksum of its output so that a partial run can be
+resumed without re-embedding anything already done.
+
+The vectors are indexed with FAISS \cite{johnson2019faiss} using an
+\texttt{IVF,PQ} (inverted-file, product-quantised) index rather than a
+flat or scalar-quantised one. This was a measured decision, not a default:
+the installed FAISS build on the development machine cannot memory-map an
+IVF index at all, this is confirmed by testing on an index of only 5{,}000
+vectors, so any index that does not fit entirely in RAM cannot be served.
+An uncompressed scalar-quantised index over the full corpus would occupy
+approximately 7.6\,GiB, which does not comfortably coexist in memory
+alongside the query encoder and the reranker on the available hardware. The
+product-quantised index occupies roughly 1\,GiB and is built in a single
+in-memory pass.
+
+\subsection{Sparse Retrieval}\label{3.3.2}
+
+Sparse retrieval uses BM25 \cite{robertson2009bm25} over a SQLite
+FTS5 full-text index, chosen specifically for exact biological
+terminology: gene names, enzyme names, abbreviations, where a dense
+embedding can blur a distinction a literal keyword match preserves.
+Query execution is conjunctive first: all query terms are required to
+match, and the query relaxes to a looser \texttt{OR} match only if the
+conjunctive form returns too few results. This matters because
+\texttt{ORDER BY bm25()} in SQLite must score every matching row before
+returning the top results, so an unconstrained \texttt{OR} of common terms
+against a large index can force the database to score hundreds of
+thousands of rows for a single query, a real performance problem measured
+directly during this internship and described further in Chapter~4.
+
+\subsection{Hybrid Fusion and Reranking}\label{3.3.3}
+
+Dense and sparse results are combined through Reciprocal Rank Fusion
+across three channels: dense BGE, core BM25, and a separately weighted
+PubMed BM25 channel, each item's score being the sum, across channels
+it appears in, of one divided by its rank plus a constant. The fused
+candidate list is then rescored by a \texttt{BAAI/bge-reranker-base}
+cross-encoder, which reads the query and each candidate passage together
+rather than comparing precomputed vectors, and is measurably more accurate
+at judging relevance at the cost of being too slow to run over every
+document in the corpus, which is why it is applied only to the fused
+candidates rather than to the whole index.
+
+\subsection{Evidence Selection}\label{3.3.4}
+
+Reranked candidates are trimmed to what the prompt budget and the model's
+context window can actually hold, subject to a per-source cap that
+prevents one prolific source from crowding out source diversity in the
+final answer.
+
+\section{Query Routing}\label{3.4}
+
+Every question passes through five routing decisions before retrieval
+begins:
+
+\begin{itemize}
+\item \textbf{Task type}: which of thirteen categories (factual recall,
+process explanation, comparison, numerical question, misconception
+correction, and so on) the question falls into.
+\item \textbf{Biology subdomain}: one of eighteen labels, from cell
+biology to bioinformatics.
+\item \textbf{Learner level}: eight levels from elementary to research.
+\item The \textbf{teaching style} to use in the response, one of nine
+modes described below.
+\item The \textbf{context level}, which selects how much retrieval depth
+the question warrants.
+\end{itemize}
+
+\subsection{Teaching Styles}\label{3.4.1}
+
+Nine teaching modes are supported, each imposing a distinct answer
+structure:
+
+\begin{itemize}
+\item Direct answer: a concise response for quick factual questions.
+\item Guided explanation: prerequisite, intuition, technical detail,
+example, summary, self check.
+\item Socratic: guiding questions rather than an immediate answer.
+\item Exam mode: definition, mechanism, diagram guidance, common mistakes.
+\item Homework support.
+\item Revision notes.
+\item Misconception repair.
+\item Research mode.
+\item Teach-back, where the learner is asked to explain the concept back
+and their explanation is evaluated.
+\end{itemize}
+
+This is what allows the same underlying model to visibly change how it
+answers depending on who is asking and why.
+
+\subsection{Context Levels}\label{3.4.2}
+
+Five context levels govern retrieval depth. Level 0 skips retrieval
+entirely for simple conversational turns. Level 1 retrieves ten passages
+and reranks to five, for straightforward definitions. Level 2 retrieves
+thirty and reranks to ten, with evidence compression, for multi-concept
+or comparison questions. Level 3 performs hierarchical retrieval, 
+ranking whole documents by their best-scoring chunk, then pulling in
+neighbouring chunks from the top documents so that a section split across
+several chunks reads as continuous context. Level 4 decomposes the query
+into sub-questions (for example, splitting ``difference between mitosis
+and meiosis'' into separate retrievals for each term), fuses the results,
+and applies the Level 3 expansion on top.
+
+\section{Answer Generation}\label{3.5}
+
+The local generator is \texttt{aura-bio:v0}, a persona-adapted build of a
+Qwen3.5 4-billion-parameter model, served
+through Ollama and running entirely on a single consumer GPU. The prompt
+assembled for each question numbers the retrieved evidence so it can be
+cited inline as \texttt{[1]}, \texttt{[2]}, and so on, states the
+system's grounding and citation requirements, and layers the teaching-mode
+structure and learner-level vocabulary guidance on top. Two prompt
+behaviours were added specifically in response to measured failures
+described in Chapter~4: an explicit instruction that retrieved evidence
+should \emph{add to} what the model already knows rather than restrict it,
+and a length budget that keeps introductory scaffolding brief so the
+model's answer does not run out of length before reaching the substance of
+the question.
+
+\section{Verification Framework}\label{3.6}
+
+Every draft answer is checked by a composable set of verifiers before it
+is accepted or sent back for revision. Two different kinds of check are
+deliberately kept separate, because they carry different authority: a
+handful of \emph{deterministic} checkers, which recompute or re-derive a
+claim and can therefore be trusted to raise a blocking error, and one
+\emph{learned} checker, which can only ever flag something for a human or
+a stricter deterministic check to confirm.
+
+\begin{table}[h]
+\centering
+\caption{Verification checkers implemented}
+\label{tab:3.2}
+\footnotesize
+\begin{tabularx}{\textwidth}{@{}p{3.4cm} X p{2.2cm}@{}}
+\toprule
+\textbf{Checker} & \textbf{What it does} & \textbf{Authority} \\
+\midrule
+Claim support (NLI) & Labels each claim \texttt{supported}, \texttt{contradictory}, or \texttt{unsupported} against the retrieved evidence using a DeBERTa-based natural-language-inference model \cite{he2021deberta} & Learned (blocks only on a materially contradicted answer) \\
+\addlinespace[3pt]
+Terminology \& entities & Misspellings, confusable term pairs, unexpanded abbreviations, invalid binomial names & Deterministic \\
+\addlinespace[3pt]
+Process order \& location & Compares stated step order against canonical orderings for nine processes (DNA replication, mitosis, glycolysis, etc.) and checks cellular compartment claims & Deterministic \\
+\addlinespace[3pt]
+Numerical (SymPy) & Recomputes Hardy Weinberg, Mendelian ratios, population growth, Michaelis Menten, dilution, and carrier-probability questions \cite{meurer2017sympy} & Deterministic \\
+\addlinespace[3pt]
+Sequences (Biopython) & Checks stated codon-to-amino-acid, start/stop-codon, complement, and GC-content claims against the standard genetic code \cite{cock2009biopython} & Deterministic \\
+\addlinespace[3pt]
+Chemical equations \& units & Balances stated equations by element and flags physiologically impossible unit magnitudes & Deterministic \\
+\addlinespace[3pt]
+Pathway stoichiometry & Compares stated metabolic yields (net ATP, NADH per cycle turn, etc.) against known constants & Deterministic \\
+\addlinespace[3pt]
+Entity authority (question-side) & Checks whether a question presupposes an entity absent from a 135{,}941-name lexicon built from the corpus's own naming authorities & Deterministic (informational) \\
+\addlinespace[3pt]
+Uncertainty & Distinguishes established fact from debated, hypothesis, and speculation, and flags an unsupported absolute statement & Deterministic \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The decision rule is simple by design: any deterministic \texttt{error}
+blocks the answer and triggers a revision naming the specific defect. A
+materially contradicted claim (a meaningful share of the answer's claims,
+not merely one among many, disagreeing with the evidence) also blocks.
+Everything else is accepted, with weaker signals recorded in the trace for
+review rather than used to force a rewrite. This rule was not the first one
+implemented, and Chapter~4 describes in detail why the earlier, stricter
+version had to be replaced.
+
+\section{External Critique}\label{3.7}
+
+During development, a hosted model reviews generated answers as an
+independent second opinion, currently GLM (\texttt{glm-4.7-flash}) via
+Z.AI. The critic outputs a structured judgement (supported claims, unsupported claims,
+terminology errors, missing concepts, and an accept/revise decision) and
+is bound by two safety rules: it can never override a deterministic
+verifier error, and it can only ever make a decision \emph{stricter} than
+the deterministic layer's, never looser. This keeps the local model as the
+actual generator at all times. The external model is a reviewer, never a
+substitute author.
+
+\section{Benchmark and Evaluation Design}\label{3.8}
+
+Following the reasoning in Section~\ref{2.5}, the entire evaluation is
+scored by machine-checkable answer keys rather than by a second language
+model's judgement. A benchmark of 441 questions spans all eighteen
+biology subdomains, every supported task type, and learner levels from
+high school to research. Each question's answer key states, as
+applicable:
+
+\begin{itemize}
+\item Required concepts that must appear.
+\item Forbidden phrases that must not.
+\item A numeric answer with a tolerance, checked independently by the
+same SymPy solvers used inside the verifier.
+\item A canonical step ordering.
+\end{itemize}
+
+Eight questions are deliberately adversarial, presupposing an entity that
+does not exist (for example, a fabricated enzyme or a fabricated
+taxonomic species). A correct answer to these refuses the premise rather
+than inventing detail to satisfy it, which is the benchmark's direct test
+of hallucination.
+
+Four systems are compared on identical questions:
+
+\begin{itemize}
+\item The \textbf{baseline}: the raw model, no pipeline at all.
+\item \textbf{basic\_rag}: hybrid retrieval only, with no reranking,
+verification, or critique.
+\item \textbf{full\_rag}: the complete pipeline.
+\item \textbf{finetuned\_rag}: the full pipeline once a fine-tuned
+adapter is available.
+\end{itemize}
+
+This four-way structure is what lets a specific claim, for example
+``the reranker helped'' or ``verification helped'', be attributed to the
+component responsible, rather than only ever reporting one combined
+number.
+
+\section{Tools and Technology Stack}\label{3.9}
+
+\begin{table}[h]
+\centering
+\caption{Core technology stack}
+\label{tab:3.3}
+\footnotesize
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+\textbf{Layer} & \textbf{Tools} \\
+\midrule
+Local inference & Ollama, Qwen3.5 4B model \cite{qwen2023technical} \\
+Embeddings \& reranking & \texttt{sentence-transformers}, BGE base/reranker \cite{xiao2023bge}, SapBERT \cite{liu2021sapbert} \\
+Sparse retrieval & SQLite FTS5 / BM25 \cite{robertson2009bm25} \\
+Dense retrieval & FAISS \cite{johnson2019faiss} \\
+Deterministic verification & SymPy \cite{meurer2017sympy}, Biopython \cite{cock2009biopython}, \texttt{periodictable}, \texttt{pint} \\
+Learned verification & DeBERTa-v3 NLI \cite{he2021deberta} \\
+Router training & scikit-learn (logistic regression, SVM, grid search) \\
+External critic & Z.AI GLM, Google Gemini (client implemented) \\
+Backend & FastAPI \\
+Frontend & Vite, React 19, TanStack Query, Tailwind \\
+Language \& tooling & Python, PyTorch, Hugging Face Transformers, pytest/unittest \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Hardware}\label{3.10}
+
+Development and all evaluation reported in Chapter~4 were carried out on
+consumer hardware: a laptop with an NVIDIA GTX 1650 (4\,GiB VRAM) and
+approximately 16\,GiB of system RAM, supplemented by Kaggle's free GPU
+tier for the large one-off embedding batches described in
+Section~\ref{3.3.1}. This constraint shaped several concrete decisions
+documented in Chapter~4, the choice of a product-quantised rather than
+scalar-quantised dense index, running the cross-encoder reranker and the
+NLI verifier on CPU rather than GPU so as not to evict the language model
+from the available VRAM, and sizing the fine-tuning plan in Chapter~5
+around what is achievable on this hardware rather than around an idealised
+budget.

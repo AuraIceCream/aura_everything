@@ -15,9 +15,15 @@ The stages are intentionally separate and resumable:
 3. `chunk` creates section-aware passages using the BGE tokenizer.
 4. `embed` generates normalized BGE Base v1.5 vectors in independent float16
    shards.
-5. `index` builds a compact FAISS SQ8 dense index for embedded chunks and an
-   SQLite FTS5 sparse index over every available chunk.
-6. `search` applies Reciprocal Rank Fusion to dense and sparse candidates.
+5. `build-dense-jobs` builds a FAISS `IVF,PQ` dense index in one pass from the
+   extracted Kaggle embedding jobs, and `build-sparse` builds an SQLite FTS5
+   sparse index (`--compact`/`detail=none` for the PubMed-scale corpus).
+6. `hybrid-search` applies Reciprocal Rank Fusion across the dense, core-BM25,
+   and separately weighted PubMed-BM25 channels.
+
+`IVF,PQ` is the dense default, not SQ8: the installed FAISS build on Windows
+cannot memory-map an IVF index, so the index must fit in RAM to be served. A
+`PQ96` core index is ~1 GiB and loads normally, where SQ8 would be ~7.6 GiB.
 
 Large structured sources use their provider IDs as trusted uniqueness keys.
 In particular, filtered PubMed records are PMID-partitioned and therefore skip

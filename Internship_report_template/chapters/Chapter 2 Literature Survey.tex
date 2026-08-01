@@ -1,0 +1,184 @@
+\section{Overview}\label{2.1}
+
+This chapter surveys the four bodies of prior work that AURA-Bio's design
+draws on directly: retrieval-augmented generation, hallucination in
+language models, dense and sparse retrieval, and the case against using a
+second language model as the sole judge of a first one's output. It closes
+with a short account of intelligent tutoring systems, since AURA-Bio's
+adaptive-teaching component is not a new idea in education, only a new
+setting for it.
+
+\section{Retrieval-Augmented Generation}\label{2.2}
+
+The idea of pairing a language model with an external, searchable knowledge
+source rather than relying purely on what the model memorised during
+training was formalised by Lewis et al.\ \cite{lewis2020rag}, whose original
+Retrieval-Augmented Generation (RAG) architecture retrieves a small number
+of relevant passages and conditions the model's output on them. The appeal
+is straightforward: a model can be kept current and be made to answer
+about specific documents without retraining it, simply by changing what it
+is allowed to read at answer time. Gao et al.\ \cite{gao2023ragsurvey}
+survey how the field has grown since, through better chunking, better
+retrieval, and multi-stage pipelines. But the surveyed systems share a
+structural limitation directly relevant to this project: most stop once an
+answer has been generated from the retrieved context. They do not
+independently check whether the generated answer actually agrees with what
+it cites, nor whether it omitted something the underlying model already
+knew. Both gaps are addressed in AURA-Bio's verification layer, described in
+Chapter~3, and both turned out in practice to matter (Chapter~4).
+
+Shuster et al.\ \cite{shuster2021retrieval} showed specifically that
+retrieval augmentation reduces, but does not eliminate hallucination in
+conversational models, which motivates treating retrieval as one layer of
+defence rather than a complete solution on its own.
+
+\section{Hallucination in Language Models}\label{2.3}
+
+Ji et al.\ \cite{ji2023hallucination} provide the standard survey of
+hallucination in natural-language generation that describes model output that is fluent
+and plausible but not grounded in any real source or fact. Their taxonomy
+distinguishes \emph{intrinsic} hallucination (contradicting the given
+source) from \emph{extrinsic} hallucination (asserting something the source
+neither confirms nor denies) which is a distinction that maps directly onto
+AURA-Bio's claim-support labels of \texttt{contradictory} versus
+\texttt{unsupported} versus \texttt{unverifiable} (Chapter~3). A recurring
+theme in this literature, and one this project's own measurements
+independently confirmed (Chapter~4), is that hallucination rates reported
+by an automated benchmark are only as trustworthy as the scorer that
+produces them: a scorer that looks for a fixed set of literal phrases will
+systematically miscount a model that expresses the same idea in different
+words.
+
+\section{Dense and Sparse Retrieval}\label{2.4}
+
+Sparse retrieval based on term matching has a long history, and the BM25
+ranking function described by Robertson and Zaragoza
+\cite{robertson2009bm25} remains, decades later, a strong and
+computationally cheap baseline, particularly for exact terminology:
+gene names, enzyme names, and abbreviations, where a dense embedding can
+blur distinctions that a keyword match preserves exactly. Dense retrieval,
+by contrast, represents text as vectors positioned so that semantically
+similar passages sit close together regardless of exact wording. Reimers
+and Gurevych's Sentence-BERT \cite{reimers2019sbert} made it practical to
+produce high-quality sentence embeddings efficiently, and the BGE family of
+embedding models \cite{xiao2023bge} used in this project builds on that
+line of work with training specifically aimed at retrieval quality.
+Domain-specific embeddings matter too: Liu et al.'s SapBERT
+\cite{liu2021sapbert} demonstrated that an encoder pretrained on biomedical
+entity synonyms captures distinctions a general-purpose encoder misses,
+which is why a biomedical encoder is one of the components evaluated for
+this project's learned question router (Chapter~3). Fast approximate
+nearest-neighbour search over millions of such vectors is made practical by
+FAISS \cite{johnson2019faiss}, which underpins the dense index built for
+this project.
+
+Neither channel alone is sufficient: sparse retrieval misses paraphrase and
+synonym, dense retrieval can miss exact rare terms. Combining the two,
+reciprocal rank fusion, in this project's case, and then re-scoring the
+combined candidates with a cross-encoder reranker is now standard practice
+in retrieval-heavy systems, and is the retrieval architecture adopted here.
+
+\section{Why Not Use a Language Model as the Judge}\label{2.5}
+
+A tempting shortcut for evaluating whether an answer is correct is to ask
+another, larger language model to grade it. Zheng et al.\
+\cite{zheng2023judging} studied this practice carefully and documented real
+biases in it. A preference for longer answers regardless of quality, a
+tendency to prefer answers that resemble the judge model's own style, and
+inconsistency between repeated judgements of the same answer. For a
+tutoring system whose entire purpose is to be more trustworthy than an
+unsupervised model, grading its own homework with a second model would
+undermine the premise. AURA-Bio's benchmark (Chapter~3) is therefore scored
+by machine-checkable answer keys including required concepts, numerical answers
+recomputed independently, and canonical process orderings, so that a
+result can be verified by inspection rather than trusted on the strength of
+another model's opinion. The internal verification layer is deterministic
+for the same reason that arithmetic is recomputed with SymPy
+\cite{meurer2017sympy} rather than read off the model's own working, and
+sequence claims are checked against the standard genetic code with
+Biopython \cite{cock2009biopython} rather than judged by a second model's
+impression of whether they sound right.
+
+\section{Parameter-Efficient Fine-Tuning}\label{2.6}
+
+Low-Rank Adaptation, or LoRA \cite{hu2021lora}, freezes a pretrained
+model's weights and learns a small pair of low-rank update matrices
+instead, cutting the number of trainable parameters and hence, the memory
+needed to train them, by orders of magnitude. QLoRA
+\cite{dettmers2023qlora} extended this further by quantising the frozen
+base model to 4-bit precision during training, making it feasible to
+fine-tune a several-billion-parameter model on a single consumer GPU with a
+few gigabytes of memory. This is the technique planned for AURA-Bio's
+fine-tuning phase (Chapter~5): full fine-tuning of even a small model is
+outside the reach of the project's hardware, but a QLoRA adapter is not.
+
+\section{The Base Model}\label{2.7}
+
+The local model driving AURA-Bio's generation is a member of the Qwen
+family, \textbf{Qwen3.5:4b}, chosen for its combination of small size,
+strong instruction-following, and a permissive licence suitable for local,
+offline deployment, the same properties the encoder family
+\cite{devlin2019bert,reimers2019sbert} was chosen for on the retrieval
+side.
+
+\section{Intelligent Tutoring Systems}\label{2.8}
+
+Adaptive teaching did not begin with language models. VanLehn's review of
+intelligent tutoring systems \cite{vanlehn2011tutoring} found that
+well-designed step-based tutoring systems can approach the effectiveness of
+human tutoring, and identified adapting to the learner's current level and
+giving targeted, specific feedback rather than generic praise or
+correction, as the features that separate an effective tutor from an
+ineffective one. AURA-Bio's teaching-style router and learner-level
+adaptation (Chapter~3) are a direct, if modernised, continuation of that
+finding: the mechanism for adapting has changed from scripted branching
+logic to a routed language-model prompt, but the underlying pedagogical
+principle, '\emph{what} is explained and \emph{how} it is explained
+should depend on who is asking' is unchanged.
+
+\section{Summary}\label{2.9}
+
+\begin{table}[h]
+\centering
+\caption{Summary of literature reviewed and its relation to AURA-Bio}
+\label{tab:2.1}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\textwidth}{@{}p{2.6cm} X X@{}}
+\toprule
+\textbf{Area} & \textbf{Key reference(s)} & \textbf{Relation to this project} \\
+\midrule
+Retrieval-augmented generation & \cite{lewis2020rag,gao2023ragsurvey} &
+Baseline architecture. AURA-Bio adds independent post-hoc verification that
+most surveyed RAG systems lack. \\
+\addlinespace[3pt]
+Hallucination & \cite{ji2023hallucination,shuster2021retrieval} &
+Motivates treating retrieval as one layer, not a complete fix. The
+intrinsic/extrinsic distinction maps onto the project's claim labels. \\
+\addlinespace[3pt]
+Sparse retrieval & \cite{robertson2009bm25} &
+BM25 channel for exact terminology, fused with dense retrieval. \\
+\addlinespace[3pt]
+Dense retrieval \& embeddings & \cite{reimers2019sbert,xiao2023bge,liu2021sapbert,johnson2019faiss} &
+Embedding model and index technology for semantic retrieval and for the
+learned question router. \\
+\addlinespace[3pt]
+LLM-as-judge risk & \cite{zheng2023judging} &
+Justifies the project's machine-checkable, deterministic benchmark rather
+than a second-model judge. \\
+\addlinespace[3pt]
+Deterministic verification tools & \cite{meurer2017sympy,cock2009biopython} &
+SymPy and Biopython used directly inside the verification layer. \\
+\addlinespace[3pt]
+Parameter-efficient fine-tuning & \cite{hu2021lora,dettmers2023qlora} &
+Planned method for the in-progress fine-tuning phase (Chapter~5). \\
+\addlinespace[3pt]
+Base model family & \cite{qwen2023technical} &
+The local generator AURA-Bio wraps. \\
+\addlinespace[3pt]
+Intelligent tutoring systems & \cite{vanlehn2011tutoring} &
+Pedagogical grounding for the teaching-style and learner-level router. \\
+\bottomrule
+\end{tabularx}
+\end{table}

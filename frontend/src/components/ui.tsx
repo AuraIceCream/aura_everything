@@ -144,8 +144,8 @@ export function CitationDrawer({
                 </div>
                 <blockquote>{citation.excerpt}</blockquote>
                 <div className="score-row">
-                  {citation.dense_score !== undefined && <span>Dense <strong>{citation.dense_score.toFixed(2)}</strong></span>}
-                  {citation.rerank_score !== undefined && <span>Rerank <strong>{citation.rerank_score.toFixed(2)}</strong></span>}
+                  {citation.dense_score != null && <span>Dense <strong>{citation.dense_score.toFixed(2)}</strong></span>}
+                  {citation.rerank_score != null && <span>Rerank <strong>{citation.rerank_score.toFixed(2)}</strong></span>}
                 </div>
                 <footer>
                   <span><ShieldCheck size={14} /> {citation.license_id}</span>

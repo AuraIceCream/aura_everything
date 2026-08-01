@@ -394,6 +394,13 @@ Needs:
 
 # 7. System Architecture
 
+> **Implementation note.** This architecture is realised as three Python
+> packages: `aura_corpus` (acquisition), `aura_bio_pipeline` (preparation and
+> index building), and `aura_bio` (the per-query runtime — routing, retrieval,
+> reranking, verification, critique, generation prompts, and tracing). The
+> runtime stages below are implemented and unit-tested; the local model, the
+> external critic client, and the dashboard are the remaining integrations.
+
 ## 7.1 High-Level Architecture
 
 ```text
@@ -773,13 +780,51 @@ Plan
 
 ## 11.1 Dataset Status
 
-### Data Collection Status: RECOVERY / IN PROGRESS
+### Data Collection Status: COMPLETE AND PROCESSED
 
-The previously collected biology corpus became corrupted and is not considered usable. The validated corpus total is therefore reset to **0 GB** until files pass checksum, format, licence, provenance, and quality checks.
+The previously collected biology corpus became corrupted. It has been rebuilt from official bulk sources, verified, cleaned, deduplicated, and chunked.
 
-The recovery target is up to **50 GB of raw source data**. This is a ceiling rather than a success metric; document quality, coverage, licensing, reproducibility, and retrieval performance take priority over byte volume.
+All 3,659 completed manifest entries passed the full verifier with zero non-`ok`
+results (compressed-stream integrity, archive safety, XML/JSON openability, PDF
+signatures, and provider checksums where published). The acquisition root is
+now treated as frozen and read-only.
 
-The recovered collection may include:
+The retrieval chunk corpus is **25.0 GiB compressed** across nine retrieval
+sources plus one evaluation-only source:
+
+| Source | Shards | GiB | Dense-embedded |
+|---|---:|---:|---|
+| `pubmed_filtered` | 1,262 | 21.799 | no — BM25 only |
+| `pmc_oa_comm_xml` | 1,231 | 2.007 | yes |
+| `uniprot_sprot` | 1 | 0.707 | yes |
+| `wikipedia_biology` | 1,693 | 0.297 | yes |
+| `nlm_litarch_biology` | 6,941 | 0.147 | yes |
+| `gene_ontology` | 1 | 0.013 | yes |
+| `mesh_descriptors` | 1 | 0.011 | yes |
+| `biolibretexts_catalog` | 70 | 0.004 | yes |
+| `reactome_summaries` | 1 | 0.002 | yes |
+| `pubmedqa_labeled` | 1 | 0.001 | excluded from retrieval |
+
+The `core` embedding profile is complete: **10,394,250 normalised
+`BAAI/bge-base-en-v1.5` float16 vectors** (768 dimensions, 14.9 GiB) produced as
+eleven atomic Kaggle GPU jobs, each carrying its exact source-shard range
+mapping, input signatures, and a vector SHA-256. The dense FAISS index is built
+in one pass directly from these job files; there is no need to re-expand them
+into a per-source layout, which would duplicate 14.9 GiB for no retrieval
+benefit.
+
+`pubmed_filtered` is deliberately **not** dense-embedded. Its 26.4M chunks would
+cost roughly 37.8 GiB of additional vectors, and SRS 14.2 wants PubMed for exact
+terminology, which BM25 already serves. Dense PubMed is a later decision gated
+on retrieval evaluation, not an assumption.
+
+`pubmedqa_labeled` is excluded from every retrieval index. It is supervised and
+evaluation material, and indexing it would contaminate the benchmark.
+
+The 50 GB raw ceiling was a ceiling, not a target; quality, coverage, licensing,
+reproducibility, and retrieval performance took priority over byte volume.
+
+The collection includes:
 
 - school-level books,
 - undergraduate textbooks,
@@ -791,16 +836,11 @@ The recovered collection may include:
 - open-access biological resources,
 - and domain-specific text.
 
-Data collection will be considered complete only after the selected official-source files have been inventoried, validated, and recorded in the corpus manifest.
-
-The next phase is:
-
-- inventory creation,
-- licence review,
-- cleaning,
-- deduplication,
-- classification,
-- and preparation.
+Inventory, licence review, cleaning, deduplication, classification, and
+chunking are complete. Retrieval chunks target 450 BGE tokens with 64-token
+overlap and never exceed 510, because BGE Base v1.5 truncates above 512 and the
+generic 500–900 range in SRS 13.1 would have silently discarded text from every
+oversized chunk.
 
 ---
 
@@ -924,6 +964,14 @@ Possible techniques:
 - locality-sensitive hashing,
 - cosine similarity,
 - and repeated n-gram detection.
+
+Chunk ids are `sha256(document_id, ordinal, text)`. Structured sources dedupe
+only within a shard, so an identical document that reaches two shards — for
+example a PMC article returned in two fetch windows — yields two chunks with the
+same id. The BM25 index builder therefore skips exact-duplicate chunk ids
+(`INSERT OR IGNORE`) and reports the count, and the dense id map tolerates two
+dense ids pointing at one chunk id. This keeps a duplicated passage from
+appearing twice in results without discarding either representation upstream.
 
 ---
 
@@ -1055,14 +1103,73 @@ BM25 should be used for:
 
 ## 14.3 Hybrid Retrieval
 
-The results of BM25 and dense retrieval should be combined.
+The results of BM25 and dense retrieval are combined with Reciprocal Rank
+Fusion (k = 60) over three channels that are kept explicitly separate:
 
-Possible fusion approaches:
+| Channel | Coverage | Weight |
+|---|---|---:|
+| Dense BGE | `core` profile, 10.4M vectors | 1.00 |
+| Core BM25 | same eight sources as dense | 0.65 |
+| PubMed BM25 | `pubmed_filtered`, lexical only | 0.85 |
 
-- Reciprocal Rank Fusion,
-- weighted score fusion,
-- normalised score fusion,
-- and rank-based aggregation.
+The core BM25 channel is down-weighted because it is largely redundant with the
+dense channel over the same documents. PubMed carries its own weight because it
+is the only channel covering that corpus at all, so its rank information is not
+duplicated anywhere else. A retrieval manifest records exactly which of the
+three channels a given deployment actually has, so PubMed is never silently
+reported as dense coverage.
+
+Dense hits are resolved back to full evidence rows through the core BM25 store,
+which is therefore required even when only dense retrieval is wanted.
+
+---
+
+## 14.3.1 Measured Storage and Query Decisions
+
+These were settled by measurement on the real corpus, not by estimate.
+
+**FTS5 `detail` level.** Over 12 biology queries scored to depth 50, a
+`detail=none` index returned byte-identical BM25 scores and identical ordering
+to `detail=full`, at 23% less disk and roughly 3x the query time. `detail=none`
+is therefore the PubMed default and `detail=full` the core default, which keeps
+phrase and NEAR queries available where they are cheap.
+
+Projected full-PubMed index size at 26.4M chunks:
+
+| Schema | Bytes/chunk | Projected |
+|---|---:|---:|
+| `detail=full` | 2,925 | 72.0 GiB |
+| `detail=none` | 2,267 | 55.8 GiB |
+
+**Rejected: compressed contentless FTS5.** Storing zlib text beside a
+`content=''` index would have reached about 29 GiB, but `bm25()` returns `-0.0`
+for every row of a contentless table, destroying ranking entirely. It is
+recorded here so the idea is not retried.
+
+**Query shape.** `ORDER BY bm25()` must score every matching row, so an OR of
+all query terms degrades badly at PubMed scale where a single common term
+matches millions of rows. Sparse search is conjunctive first and relaxes to OR
+only when AND is too selective. This is also the semantics the exact-term
+PubMed channel wants.
+
+**Dense index layout.** The default is `IVF,PQ` rather than SQ8, forced by two
+measured facts about the installed FAISS 1.14.3 on Windows:
+
+- `IO_FLAG_MMAP` cannot read an IVF index on this build — it fails on a
+  5,000-vector test index, not only at scale — so an index that does not fit in
+  RAM cannot be served at all, and the on-disk inverted-list merge recipe
+  (which reads its blocks through the same mmap path) is unusable.
+- An SQ8 `core` index is ~7.6 GiB. With ~11.7 GiB free, loading it alongside
+  the BGE query encoder and the cross-encoder reranker is too tight.
+
+A `PQ96x8` core index (8 dimensions per 8-bit subquantizer) is roughly 1 GiB.
+It is built in a single in-memory pass — train on a stratified sample across all
+eleven jobs, then add every job in float32 batches — and loaded normally at
+query time. Vectors are added in job-then-vector order, so their sequential
+FAISS ids equal the `dense_map` ids without any explicit id bookkeeping. The
+dense-id-to-chunk-id map is committed per shard and is resumable, because
+mapping ten million chunks across 9,939 shards is itself slow. SQ8 and flat
+remain available for smaller corpora and for exact-recall evaluation baselines.
 
 ---
 
@@ -2084,42 +2191,31 @@ Deliverables:
 
 ## Phase 1: Biology Data Collection
 
-### Status: RECOVERY / IN PROGRESS
+### Status: COMPLETED
 
-The earlier approximately 20 GB collection was corrupted and is no longer counted as a project deliverable. Collection is being rebuilt from official bulk datasets and APIs with a raw-data ceiling of approximately 50 GB.
+The corrupted collection was rebuilt from official bulk datasets and APIs.
 
-Completed recovery-foundation activities:
+Completed:
 
-- identification and licence review of initial official biology sources,
-- implementation of resumable official-source acquisition,
-- implementation of checksum and archive validation,
-- implementation of manifests and quarantine handling,
-- implementation of local Qwen curation with optional GLM fallback,
-- and successful small-source and PMC XML smoke tests.
+- identification and licence review of official biology sources,
+- resumable official-source acquisition,
+- checksum and archive validation,
+- manifests and quarantine handling,
+- local Qwen curation with optional GLM fallback,
+- the full bulk download across all nine retrieval sources,
+- Wikipedia biology-category filtering,
+- XML and structured-data normalisation,
+- and a full verification pass: 3,659 of 3,659 entries `ok`, zero non-`ok`.
 
-Remaining collection activities:
-
-- execute the approved bulk-download plan,
-- filter the Wikipedia and Wikibooks dumps to biology,
-- normalize downloaded XML and structured data,
-- review quarantined or ambiguous documents,
-- and report the final validated corpus size.
-
-Deliverables:
-
-- validated raw biology corpus up to the approximately 50 GB ceiling,
-- reproducible source registry,
-- checksum and file manifest,
-- licence and provenance records,
-- and source-aware corpus folders.
-
-Cleaning, deduplication, chunking, and retrieval preparation remain separate data-preparation work after acquisition.
+Deliverables produced: validated raw corpus, reproducible source registry,
+checksum and file manifest, licence and provenance records, and source-aware
+corpus folders.
 
 ---
 
 ## Phase 2: Corpus Inventory and Licence Review
 
-### Status: PENDING
+### Status: COMPLETED
 
 Tasks:
 
@@ -2145,7 +2241,13 @@ Deliverables:
 
 ## Phase 3: Data Cleaning and Deduplication
 
-### Status: PENDING
+### Status: COMPLETED
+
+Structured sources (PubMed, PMC, UniProt, GO, MeSH, Reactome, Wikipedia) use
+their stable provider IDs as trusted uniqueness keys and skip the global
+paragraph-fingerprint database, which is what makes a PubMed-scale ingest
+tractable. Less structured books retain source-scoped document, paragraph, and
+chunk fingerprints in SQLite.
 
 Tasks:
 
@@ -2172,7 +2274,7 @@ Deliverables:
 
 ## Phase 4: Corpus Structuring and Chunking
 
-### Status: PENDING
+### Status: COMPLETED
 
 Tasks:
 
@@ -2217,182 +2319,262 @@ Deliverables:
 
 ## Phase 6: Dense Retrieval Prototype
 
-### Status: PENDING
+### Status: SUBSTANTIALLY COMPLETE — evaluation outstanding
 
-Tasks:
+Done:
 
-1. Select BGE embedding model.
-2. Generate embeddings for a controlled corpus subset.
-3. Create FAISS index.
-4. Implement query embedding.
-5. Retrieve top-k chunks.
-6. Display source metadata.
-7. Evaluate Recall@k.
+1. `BAAI/bge-base-en-v1.5` selected and used for the whole `core` profile.
+2. Embeddings generated for all 10,394,250 core chunks on Kaggle GPUs.
+3. FAISS `IVF,PQ96` index built in one pass from the eleven job shards and
+   loaded into RAM at query time (this FAISS build cannot mmap IVF indexes).
+4. Query embedding applied with the BGE query prefix.
+5. Top-k retrieval with a dense-id to chunk-id map.
+6. Source metadata carried on every hit.
 
-Deliverables:
-
-- dense retrieval module,
-- FAISS index,
-- retrieval evaluation results.
+Outstanding: Recall@k measurement, which needs the Phase 18 benchmark set.
 
 ---
 
 ## Phase 7: BM25 and Hybrid Retrieval
 
-### Status: PENDING
+### Status: SUBSTANTIALLY COMPLETE — comparison report outstanding
 
-Tasks:
+Done: SQLite FTS5/BM25 indexes with a measured schema choice per corpus,
+conjunctive-first sparse search, three-channel Reciprocal Rank Fusion, and a
+retrieval manifest that records which channels a deployment actually has.
 
-1. Build BM25 index.
-2. Implement sparse retrieval.
-3. Combine dense and sparse results.
-4. Test fusion methods.
-5. Compare dense, sparse, and hybrid retrieval.
-6. Analyse exact-term retrieval.
-
-Deliverables:
-
-- BM25 module,
-- hybrid search module,
-- retrieval comparison report.
+Outstanding: the dense-versus-sparse-versus-hybrid comparison report, which
+needs the Phase 18 benchmark set.
 
 ---
 
 ## Phase 8: Reranking
 
-### Status: PENDING
+### Status: IMPLEMENTED — benchmark outstanding
 
-Tasks:
+Done: a `BAAI/bge-reranker-base` cross-encoder stage that scores fused
+candidates as query-passage pairs, reports latency, rank movement, and how many
+passages it promoted from beyond the pre-rerank cut, and an evidence selector
+with a per-source cap. The per-source cap matters because UniProt is 52% of the
+dense corpus and would otherwise crowd out the prompt.
 
-1. Select reranker.
-2. Retrieve top 30 candidates.
-3. Rerank candidates.
-4. Select final top chunks.
-5. Measure retrieval improvement.
-6. Measure latency cost.
+The reranker is optional at runtime so SRS 25 can measure with and without it.
 
-Deliverables:
-
-- reranker module,
-- reranking benchmark,
-- latency analysis.
+Outstanding: the improvement and latency benchmark, which needs Phase 18.
 
 ---
 
 ## Phase 9: Biology Router
 
-### Status: PENDING
+### Status: IMPLEMENTED — routing benchmark outstanding
 
-Tasks:
+Done: 13 task labels, 18 subdomain labels, a rule table carried as inspectable
+data, margin-aware confidence, multi-subdomain detection that escalates to
+`interdisciplinary`, and an optional JSON LLM classifier consulted only where
+the rules are not confident. A classifier that fails, or returns a label outside
+the allowed set, cannot take routing down.
 
-1. Define task labels.
-2. Define biology subdomain labels.
-3. Create rule-based router.
-4. Add LLM JSON router.
-5. Create routing evaluation dataset.
-6. Evaluate routing accuracy.
-7. Add confidence thresholds.
-
-Deliverables:
-
-- task router,
-- biology subdomain router,
-- routing benchmark.
+Outstanding: a labelled routing evaluation dataset and accuracy measurement.
 
 ---
 
 ## Phase 10: Teaching and Learner-Level Router
 
-### Status: PENDING
+### Status: IMPLEMENTED — teaching evaluation set outstanding
 
-Tasks:
+Done: 8 learner levels and 9 teaching modes, explicit user override recorded in
+the trace, level inference from stated class or from the vocabulary the asker
+used, and task-derived default teaching modes.
 
-1. Define learner levels.
-2. Define teaching styles.
-3. Create pedagogy policy.
-4. Create teaching templates.
-5. Add explicit user controls.
-6. Add automatic level inference.
-7. Evaluate teaching appropriateness.
-
-Deliverables:
-
-- learner router,
-- pedagogy router,
-- teaching templates,
-- teaching evaluation set.
+Outstanding: teaching templates per mode and the teaching-appropriateness
+evaluation set.
 
 ---
 
 ## Phase 11: Adaptive Context Manager
 
-### Status: PENDING
+### Status: IMPLEMENTED
 
-Tasks:
+Done: context levels 0–4 with per-level retrieve/rerank/revision budgets,
+escalation on deep-reasoning markers and long queries, and a cap that stops
+young-learner queries pulling depth the answer will not be allowed to use.
 
-1. Implement context levels 0–4.
-2. Define policies for each task.
-3. Add hierarchical retrieval.
-4. Add evidence compression.
-5. Add deep-mode planning.
-6. Measure quality versus latency.
+The two deep levels now have real strategies rather than a deeper top-k:
 
-Deliverables:
+- **Level 3, hierarchical.** Broad retrieval ranks *documents* by the best score
+  any of their chunks achieved, then neighbouring chunks from the top documents
+  are pulled in, so a section split across several chunks is read as continuous
+  context. Requires `document_id` on retrieved evidence, which the searcher now
+  carries.
+- **Level 4, deep reasoning.** The query is decomposed into sub-queries
+  ("difference between mitosis and meiosis" → `mitosis`, `meiosis`), each is
+  retrieved for separately, and the union is rank-fused so a passage found by
+  several sub-queries ranks higher. It then applies the Level 3 expansion.
+- **Evidence compression** trims each passage to the sentences that overlap the
+  query, preserving original order, so a deep retrieval set fits the prompt
+  budget. A passage with nothing relevant is passed through whole rather than
+  emptied.
 
-- context manager,
-- policy files,
-- context-level benchmark.
+Outstanding: the quality-versus-latency benchmark for the deep levels.
 
 ---
 
 ## Phase 12: Biology Answer Generator
 
-### Status: PENDING
+### Status: PROMPT LAYER IMPLEMENTED — local model integration outstanding
 
-Tasks:
+Done: a prompt builder that turns a route plus numbered evidence into system
+and user messages. The system prompt enforces grounding, inline `[n]` citation,
+first-use term definition below undergraduate level, and the medical-advice
+disclaimer. Each teaching mode imposes its own answer structure and each learner
+level its own vocabulary guidance, so mode and level visibly change the output
+(SRS 35.5). Revision instructions are appended verbatim on a revision pass.
 
-1. Create biology system prompts.
-2. Create teaching-mode prompts.
-3. Create citation format.
-4. Add context discipline.
-5. Add insufficient-evidence response.
-6. Add answer-format selection.
+The generator is an adapter over any chat model, so the specific local model
+(SRS 15.1) does not change the pipeline. The local model is now wired: the API's
+`OllamaGenerator` drives **`aura-bio:v0`** (a persona-customised Qwen 3.5 4B)
+through Ollama, with thinking disabled so the tutor answer — not the reasoning
+scratchpad — fills the token budget. When Ollama is unreachable it falls back to
+the extractive generator, so the system always runs.
 
-Deliverables:
-
-- biology answer generator,
-- prompt library,
-- initial RAG chatbot prototype.
+Outstanding: the baseline hardware benchmark (Phase 5) and an optional LoRA
+adapter (Phase 21).
 
 ---
 
 ## Phase 13: Biology Verification Framework
 
-### Status: PENDING
+### Status: IMPLEMENTED
 
-Tasks:
+All seven tasks are implemented and covered by tests:
 
-1. Implement claim extraction.
-2. Implement claim-context matching.
-3. Implement terminology checker.
-4. Implement process-order checker.
-5. Implement numerical checker.
-6. Implement uncertainty labelling.
-7. Generate structured verification output.
+1. Claim extraction splits a draft into sentence-level statements, dropping
+   headings, questions, and scaffolding, and stripping citation markers so
+   `[1]` is not mistaken for an asserted quantity.
+2. Claim-context matching labels each claim `supported`, `partially_supported`,
+   `unsupported`, `contradictory`, or `unverifiable`. `unverifiable` (nothing
+   retrieved) is kept distinct from `unsupported` (evidence exists and does not
+   cover the claim) because those demand different responses. A claim whose
+   numbers appear nowhere in the evidence cannot be labelled fully supported
+   however many of its words match.
+3. Terminology checking covers misspellings, confusable pairs, invalid
+   binomials, and unexpanded abbreviations, the last only at school levels.
+4. Process-order checking compares stated step order against canonical
+   orderings for nine processes, and separately catches a process placed in the
+   wrong cellular compartment.
+5. The numerical verifier recomputes Hardy-Weinberg, Mendelian ratios,
+   population growth, Michaelis-Menten, dilution, and carrier-cross probability
+   through SymPy. A solver that cannot recognise a question returns nothing, so
+   silence means "not checkable", never "correct". A method stated without a
+   figure is `unstated`, not `incorrect`. No model-generated code is executed,
+   which satisfies NFR-12 directly.
+6. Uncertainty labelling separates established, debated, incomplete,
+   hypothesis, and speculation, and flags an unsupported absolute stated as
+   settled fact as an error.
+7. The structured report carries claims, issues by severity, citation coverage,
+   grounded fraction, numerical checks, a decision, and a confidence.
 
-Deliverables:
+Each checker can be disabled independently so SRS 25 can attribute its
+contribution.
 
-- claim checker,
-- terminology checker,
-- process checker,
-- numerical verifier,
-- verification report.
+### Calibration against real model output
+
+Running the verifier over 243 real answers exposed three false-positive rules
+that would have driven pointless revisions — making the full pipeline score
+*worse* and run slower than the baseline. All three are fixed and pinned by
+regression tests:
+
+1. **Overstatement.** The absolutes list contained bare `all`, `every`, and
+   `none`, so a true statement like "the cell is the basic unit of all living
+   organisms" was flagged. Biology is full of correct universals; the list now
+   holds only genuinely risky ones (`always`, `never`, `without exception`,
+   `every single`, `invariably`).
+2. **Absence of evidence.** A claim labelled `unverifiable` — meaning nothing
+   was retrieved — could raise an overstatement *error*. That is a statement
+   about corpus coverage, not about the answer, so only `unsupported` (evidence
+   retrieved and failing to cover the claim) can now raise it.
+3. **Misspellings.** Detection used substring matching, so the correct
+   `chlorophyll` matched the misspelling `chlorophyl`. It now requires word
+   boundaries.
+4. **Step order.** This one needed three passes, each exposing the next layer:
+   - first-mention position was read as asserted order, so an answer to "what
+     happens during S phase?" was flagged for naming its own topic first. Order
+     is now judged only when the answer asserts a sequence;
+   - a sequence marker anywhere in a multi-thousand-character answer was enough
+     to qualify, so the named steps must also sit within ~600 characters of each
+     other, and a *bulleted* list no longer counts (it enumerates parts; a
+     numbered list implies order);
+   - step names matched inside unrelated compounds — "anaphase" in
+     "anaphase-promoting complex" (a protein) and "termination" in "termination
+     signal" (a stop codon) — so lookup now requires whole-term boundaries that
+     reject hyphenated compounds;
+   - finally, a connective must appear *between* the two step mentions, not
+     merely somewhere in the answer. A checkpoint explainer is organised by
+     checkpoint rather than chronologically, so it names anaphase before
+     metaphase without ever claiming that order. "anaphase, **then** metaphase"
+     is a claim; "anaphase. If errors are found … during metaphase" is not.
+5. **Process location.** The checker flagged a wrong compartment whenever the
+   process and that compartment co-occurred within a 220-character window. But
+   "mature red blood cells lack mitochondria entirely, because they rely on
+   anaerobic glycolysis" asserts the *opposite* of what it was flagged for. It
+   now requires an explicit locative link ("occurs in the", "is where") between
+   process and compartment inside a single sentence.
+6. **Hardy-Weinberg premise parsing.** The solver treated any number near the
+   word "recessive" as q², so "dominant allele frequency p = 0.7 … homozygous
+   recessive individuals" was read as q² = 0.7 and a correct answer of 0.09 was
+   marked wrong. It now reads an explicitly stated p or q as the premise, and
+   grades whichever quantity the question actually asks for (q², 2pq, p², or q)
+   rather than always grading 2pq.
+7. **Overstatement is a warning, not an error.** Even with a narrowed absolutes
+   list, the rule fires mostly on rhetorical absolutes in teaching prose —
+   "membranes are never static" is correct biology and is precisely the point
+   of the misconception question it answers. Surface keywords cannot separate
+   epistemic overreach from emphasis, so the rule now surfaces the claim for
+   review instead of forcing a revision. The claim-support labels carry the
+   hard signal, and an unsupported claim still prevents acceptance on its own.
+
+The lesson generalises: a checker tuned only on synthetic examples will fire on
+real prose, and the failure is asymmetric — a false error costs a wasted
+revision and a worse score, while a missed warning costs only a review. Rules
+that cannot be made precise belong at warning severity. Every rule here is now
+exercised against real generated answers.
 
 ---
 
 ## Phase 14: External Critic Integration
 
-### Status: PENDING
+### Status: IMPLEMENTED
+
+Done: the validated critic schema and tolerant parser; concrete clients for
+**GLM (Z.AI, `glm-4.7-flash`)** and **Gemini (`gemini-2.5-flash`)** behind one
+`Critic` interface; per-call latency and token accounting; and the SRS 17.2
+guarantee that the external model is never the primary generator. The critic is
+opt-in per request (`allow_external_critic`, NFR-14 cost control) and per
+deployment (`AURA_CRITIC`).
+
+A labelled comparison harness (`compare_critics`) scores each critic on 12
+biology answers with planted errors — decision accuracy, false-accept rate
+(the dangerous direction), false-revise rate, agreement with the deterministic
+verifier, latency, and tokens. Measured live: **GLM `glm-4.7-flash` scored
+0.92-1.0 decision accuracy with zero false-revises, versus 0.75 for the
+deterministic verifier alone**, so the external critic adds real error-catching
+without nagging on sound answers. Gemini runs the moment a `GEMINI_API_KEY` is
+present.
+
+The two Risk-4 safety properties are enforced and tested: an untrusted critic
+cannot block a clean answer, and an approving critic cannot override a verifier
+error.
+
+GLM is the selected critic; Gemini is implemented but deprioritised. Free-tier
+providers rate-limit bursts, so the client retries 429/5xx with exponential
+backoff honouring `Retry-After`, and the comparison paces its calls. A call
+that still fails is marked untrusted, which by the Risk-4 rule can never clear
+or block an answer on its own.
+
+Outstanding: longer-run cost tracking across a full evaluation, and the Gemini
+side of the comparison if a key is ever added.
+
+---
 
 Tasks:
 
@@ -2414,54 +2596,66 @@ Deliverables:
 
 ## Phase 15: Critique-Revision Loop
 
-### Status: PENDING
+### Status: IMPLEMENTED — before/after evaluation outstanding
 
-Tasks:
+Done: verifier and critic are combined into one decision, revision runs to the
+per-context-level budget (one loop normally, two in deep mode), and every pass
+re-verifies. Revision instructions are derived from actual findings, so the
+revision prompt names the specific defect rather than asking for a better
+answer.
 
-1. Connect verifier to critic.
-2. Define accept/revise/reject decisions.
-3. Implement one-loop revision.
-4. Implement deep-mode two-loop revision.
-5. Reverify revised answers.
-6. Measure accuracy improvement.
-7. Measure latency increase.
+Two safety properties are enforced and tested, both from SRS 31 Risk 4:
 
-Deliverables:
+- a critic returning malformed output is marked untrusted and cannot block an
+  answer the deterministic verifier already cleared;
+- a critic saying `accept` cannot override a verifier error.
 
-- revision pipeline,
-- before-and-after evaluation,
-- revision success report.
+Outstanding: measuring accuracy improvement and added latency, which needs
+Phase 18.
 
 ---
 
 ## Phase 16: Pipeline Transparency and Logging
 
-### Status: PENDING
+### Status: IMPLEMENTED — viewer outstanding
 
-Tasks:
+Done: a versioned trace schema recording routing, retrieval channel counts,
+reranking movement, selected evidence, every draft with its verification and
+critique, the decision, per-stage latency, and the failure category. Traces go
+to SQLite for the dashboard and to JSONL for export. A separate user-facing
+view exposes sources, confidence, verification status, and whether the answer
+was revised, keeping low-level internals to developer mode as SRS 19.2 requires.
 
-1. Define trace schema.
-2. Log router output.
-3. Log retrieval results.
-4. Log reranking.
-5. Log final evidence.
-6. Log draft and revised answers.
-7. Log verifier output.
-8. Log critic output.
-9. Log latency and token usage.
-10. Add developer trace viewer.
+Failure records follow the SRS 21.2 shape and default to
+`approved_for_training = 0`, so nothing reaches a training export without the
+human approval SRS 21.3 requires.
 
-Deliverables:
-
-- trace logger,
-- query database,
-- developer inspection interface.
+Outstanding: the developer trace viewer, which is part of Phase 17.
 
 ---
 
 ## Phase 17: Dashboard Development
 
-### Status: PENDING
+### Status: FRONTEND AND API IMPLEMENTED — some panels use pipeline output directly
+
+The dashboard is a Vite + React 19 + TanStack Query + Tailwind app
+(`frontend/`), not Streamlit: Ask (query playground), Retrieval lab, Evaluation
+(benchmark and ablation), Corpus readiness, Pipeline traces, and Settings.
+
+A FastAPI backend (`aura_bio.api`) serves the app against the real runtime:
+`/api/v1/health`, `/capabilities`, `/corpus/status`, `/runs` (POST + GET),
+`/runs/{id}/events` (SSE), `/retrieval/search`, and `/evaluation/summary`. Runs
+execute the real pipeline; the SSE endpoint replays the genuine trace and
+streams the real answer, so the progressive UI is backed by real routing,
+retrieval, and verification. Every dependency is optional (NFR-09): with no
+model it answers extractively from evidence; with no dense index it serves the
+instant BM25 channels. `AURA_DENSE=1` opts into the dense channel where RAM
+allows.
+
+Outstanding: wiring the local model for fluent generation, and the failure and
+teaching-quality panels beyond what the trace already exposes.
+
+---
 
 Tasks:
 
@@ -2483,7 +2677,28 @@ Deliverables:
 
 ## Phase 18: Evaluation Dataset Development
 
-### Status: PENDING
+### Status: BENCHMARK AND HARNESS IMPLEMENTED — retrieval-relevance labels outstanding
+
+A curated benchmark of **441 biology questions** spans all 18 subdomains, the
+task types, and learner levels from high school to research
+(`aura_bio.evaluation`, exported to `benchmarks/biology_benchmark.jsonl`). Every
+item carries a machine-checkable answer key so grading does not depend on an LLM
+judge (SRS 31 Risk 4): factual items list required and forbidden concepts,
+numerical items (10) are recomputed with SymPy, process items (12) are checked
+for step order, and **8 adversarial items** name non-existent entities to score
+hallucination — a correct answer refuses rather than fabricates.
+
+A deterministic scorer and a four-system harness implement the SRS 25 ablation:
+`baseline`, `basic_rag` (hybrid retrieval only), `full_rag` (the whole
+pipeline), and `finetuned_rag`. The harness produces the SRS 25 comparison
+table (overall, concept recall, numeric accuracy, process-order accuracy,
+hallucination rate, forbidden-claim rate, latency) and skips a system that is
+not available yet rather than faking it.
+
+Outstanding: gold retrieval-relevance labels for Recall@k/MRR/nDCG on the
+built indexes, and the held-out train/validation/test split.
+
+---
 
 Tasks:
 
@@ -2533,7 +2748,16 @@ Deliverables:
 
 ## Phase 20: Failure-Learning Dataset
 
-### Status: PENDING
+### Status: CAPTURE IMPLEMENTED — curation UI outstanding
+
+Done: the 14-category failure taxonomy, automatic categorisation from stage
+output, failure records in the SRS 21.2 shape, and an export that emits
+`failures.jsonl`. Records default to `approved_for_training = 0`, so nothing
+reaches a training export without the human approval SRS 21.3 requires.
+
+Outstanding: the human approval interface and the corrected-answer capture flow.
+
+---
 
 Tasks:
 
@@ -2555,7 +2779,36 @@ Deliverables:
 
 ## Phase 21: Biology LoRA Adapter
 
-### Status: OPTIONAL / FUTURE ADVANCED PHASE
+### Status: DATA PREPARED — training not started
+
+A ~300 MB training corpus is built at `G:\aura_data\AURA-Training\`, mixing
+**30% question-answer records with 70% biology prose**. Every record carries its
+provenance, because the three QA sources are not equally valuable:
+
+- `gold` — 125 answers that passed both the benchmark answer key and corpus
+  verification, with supporting chunk ids;
+- `pubmedqa` — ~723 expert-labelled research questions with evidence and a
+  conclusion;
+- `template` — questions derived structurally from a chunk's title and section.
+  These teach answer *format* and grounding, not reasoning: a question
+  mechanically derived from the answer it is paired with cannot supervise
+  inference. A training run can down-weight or drop them by `kind`.
+
+Selection is by teaching register rather than coverage. Structured record
+sources (UniProt, GO, MeSH, Reactome — 5.7M chunks) are excluded, since training
+on a database record teaches the model to emit database records. A
+topical-relevance check was necessary beyond prose quality: biographies of
+biologists and clinical systematic reviews are excellent prose that teaches no
+biology, and rejecting them removed roughly 19,000 chunks per 20 MB kept.
+
+Sizing is deliberate and argued in `benchmarks/FINETUNING_DATA.md`. Measured at
+~4.1 characters per token, 1 GiB would be ~262M tokens — 10–15 days of
+continuous training on a GTX 1650, or about two weeks of Kaggle quota, to move a
+metric that is already at 0.822 with 55% of questions perfect. The measured gap
+is behavioural (hallucination at 0.375), which is learned from demonstrations,
+not from more prose. **Start with SFT and explicit refusal examples**; consider
+continued pretraining only if the benchmark then shows knowledge gaps that
+retrieval cannot close.
 
 Tasks:
 
@@ -2624,50 +2877,52 @@ Deliverables:
 
 # 30. Milestones
 
-## Milestone 1
+## Milestone 1 — DONE
 
-Corpus recovered and inventoried.
+Corpus recovered, verified (3,659/3,659 `ok`), inventoried, cleaned,
+deduplicated, and chunked (25.0 GiB across nine retrieval sources).
 
-Status:
+## Milestone 2 — DONE
 
-- collection recovery in progress,
-- inventory pending.
+Cleaned and chunked biology corpus, plus the complete `core` embedding set
+(10,394,250 BGE vectors).
 
-## Milestone 2
+## Milestone 3 — PARTIAL
 
-Cleaned and chunked biology corpus.
+Dense retrieval (IVF-PQ index) built; baseline local model still to be selected.
 
-## Milestone 3
+## Milestone 4 — PARTIAL
 
-Baseline model and dense RAG working.
+Hybrid retrieval and the reranker are implemented; the comparison needs the
+Phase 18 benchmark set.
 
-## Milestone 4
+## Milestone 5 — DONE
 
-Hybrid retrieval and reranking evaluated.
+Task, subdomain, learner-level, teaching, and context routers implemented and
+tested.
 
-## Milestone 5
+## Milestone 6 — DONE
 
-Biology router and teaching router working.
+Biology verification framework implemented (claims, terminology, process order
+and location, SymPy numerical, uncertainty, citations).
 
-## Milestone 6
+## Milestone 7 — DONE
 
-Biology verification framework implemented.
+Critic schema and the bounded critique-revision loop integrated, with the
+deterministic-checks-win safety guarantees.
 
-## Milestone 7
+## Milestone 8 — PARTIAL
 
-Critic and revision loop integrated.
-
-## Milestone 8
-
-Transparent dashboard completed.
+Trace and failure logging implemented (SQLite + JSONL); the Streamlit dashboard
+is the remaining piece.
 
 ## Milestone 9
 
-Full benchmark and ablation completed.
+Full benchmark and ablation.
 
 ## Milestone 10
 
-Optional LoRA and user study completed.
+Optional LoRA and user study.
 
 ---
 

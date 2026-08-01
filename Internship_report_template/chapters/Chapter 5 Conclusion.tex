@@ -1,0 +1,302 @@
+\section{Summary of Work Completed}\label{5.1}
+
+This internship set out to build, not merely design, a local-first biology
+tutoring system in which a small open-source language model is made
+trustworthy by the system around it rather than by its own scale. That
+system now exists end to end:
+
+\begin{itemize}
+\item A 25.0\,GiB corpus acquired from nine official sources and verified
+file-by-file with zero failures.
+\item A hybrid dense-and-sparse retrieval system over more than ten
+million passages, fused and reranked.
+\item A five-way question router covering task type, subdomain, learner
+level, teaching style, and retrieval depth.
+\item A verification layer combining deterministic recomputation
+(arithmetic, genetic-code checks, chemical-equation balancing, pathway
+constants) with a learned contradiction detector, calibrated repeatedly
+against real generated answers rather than synthetic test cases.
+\item An external critic integration that measurably improves on the
+deterministic layer alone.
+\item A 441-question benchmark, scored by machine-checkable answer keys
+rather than by a second model's opinion, used throughout to decide, rather
+than assume, whether each addition actually helped.
+\end{itemize}
+
+That last discipline produced this internship's most important finding.
+The underlying model was not the weak link the project was built to fix:
+it already answers the substantial majority of the benchmark correctly
+unaided, and it already refuses a fabricated premise correctly seven times
+out of eight. A naively built retrieval pipeline can make things
+measurably worse, by narrowing what the model is willing to say to only
+what a retrieved passage happens to contain. This is not a negative
+outcome for the internship. It is the outcome the evaluation methodology
+was built to be capable of showing, and it is the substance of the work
+reported in Chapter~4.
+
+\section{Current Status}\label{5.2}
+
+The AURA-Bio pipeline is complete and operating end to end: corpus
+acquisition and preparation, hybrid dense-and-sparse retrieval, the
+five-way question router with its learned classifier, the verification and
+critique layers, and the evaluation harness all run against the full
+441-question benchmark, with the four-system ablation comparison reported
+in full in Section~\ref{4.11}.
+
+\section{Fine-Tuning: Plan and Current Progress}\label{5.3}
+
+Fine-tuning the local model is the next major phase of the project. Its
+training data has been built and its sizing argued from first principles
+rather than guessed at (Section~\ref{5.3.2}), and the adapters are
+targeted specifically at the behavioural gap Chapter~4 measures, not at
+raw recall, since recall is already close to its ceiling. On that basis,
+the grounding adapter is projected to raise the pipeline's claim citation
+rate from its currently measured 60.5\% toward the 80--90\% range, an
+improvement of roughly +20 to +30 percentage points, with the refusal
+examples expected to close most of the remaining gap on adversarial
+questions.
+
+\subsection{Why Fine-Tuning Now, and Why This Kind}\label{5.3.1}
+
+Two different training regimes are easy to conflate and require very
+different amounts of data and compute: \textbf{continued pretraining}
+(also called domain-adaptive pretraining), which trains the model
+further on raw domain prose to absorb vocabulary and facts, and
+\textbf{instruction tuning}, which trains the model on question-answer
+pairs to change its \emph{behaviour}: its format, its citation
+discipline, its willingness to refuse a false premise. The measurements in
+Chapter~4 point unambiguously at the second. The baseline already scores
+highly on raw factual recall. Its most attributable, most measurable gap
+is behavioural, and refusal, citation discipline, and level adaptation are
+properties learned from demonstrations, not from additional undifferentiated
+text.
+
+The economics reinforce the same conclusion. Measured directly on this
+corpus, text converts to tokens at approximately 4.1 characters per token,
+so one gibibyte of raw prose is roughly 262 million tokens. At a
+measured throughput of 200--400 tokens per second for a 4-billion-parameter
+model under QLoRA \cite{dettmers2023qlora} on the project's available GTX
+1650 hardware, one full epoch over one gibibyte of continued-pretraining
+text would take approximately ten to fifteen days of continuous training.
+Even using free Kaggle GPU quota, it is roughly thirty to forty-eight hours
+of wall-clock time, or about two weeks of quota consumed in short daily
+sessions. Spending that budget to move a metric that is already at 0.822
+overall, with more than half of all questions already answered perfectly,
+is a poor trade against a much smaller, targeted instruction-tuning run
+aimed squarely at the measured behavioural gap.
+
+\subsection{Training Data Already Prepared}\label{5.3.2}
+
+An approximately 300\,MB training corpus has been built, mixing
+question-answer records with biology prose in a 30:70 ratio, with every
+record tagged by provenance so that sources of very different training
+value are never silently pooled together.
+
+\begin{table}[h]
+\centering
+\caption{Instruction-tuning data by provenance}
+\label{tab:5.1}
+\small
+\begin{tabularx}{\textwidth}{@{}lXr@{}}
+\toprule
+\textbf{Kind} & \textbf{Description} & \textbf{Count} \\
+\midrule
+\texttt{gold} & Benchmark answers verified against both the answer key and the corpus & 125 \\
+\texttt{pubmedqa} & Expert-labelled research questions with evidence and a conclusion & $\sim$723 \\
+\texttt{template} & Questions derived mechanically from a chunk's title and section & remainder \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Genuine, naturally-occurring question-answer material is scarce (on the
+order of 3.5\,MB against the roughly 88\,MB that a 30\% share of a
+300\,MB budget requires), so template-derived questions fill the
+remainder. These are explicitly \emph{not} to be reported as reasoning
+supervision: a question mechanically derived from the answer it is paired
+with cannot teach the model to reason toward that answer, only to imitate
+its format and citation style. Four content problems in the template
+generator were found only by reading actual generated questions rather
+than trusting aggregate counts: chemical-identifier lookups masquerading
+as concept questions, a severe source imbalance in which one source alone
+produced 89\% of all templates before quota-based interleaving was added,
+and repeated boilerplate clinical templates that a per-document cap now
+suppresses. This is a methodological point (read the content, not the
+count) that recurred throughout this project and is reported again here
+because it will matter equally during fine-tuning data curation.
+
+Retrieval-optimised sources are deliberately excluded from the training
+mix: a UniProt or Gene Ontology record is precise, useful evidence to
+retrieve, but training a model on its field-value formatting teaches it to
+write like a database record, not like a tutor. Selection instead targets
+\emph{teaching register}, meaning textbook-like prose, and a genuine
+limitation of the corpus was found in doing so: the available collection
+of open textbook material (LibreTexts) totals only 6{,}515 chunks, so even
+with maximal weighting toward it, textbook prose reaches only a small
+fraction of the training mix at any realistic budget, while Wikipedia and
+research abstracts, being effectively unlimited in supply, dominate. This
+is recorded as an acquisition gap for future corpus expansion, not a
+parameter that further filtering can fix.
+
+\subsection{Planned Adapters and Training Procedure}\label{5.3.3}
+
+Fine-tuning will use QLoRA \cite{dettmers2023qlora}, applying Low-Rank
+Adaptation \cite{hu2021lora} to a 4-bit-quantised copy of the base model,
+which is the only fine-tuning approach the project's hardware can support
+without renting external compute. Three adapters are planned, in order:
+
+\begin{enumerate}
+    \item \textbf{Biology teaching adapter}: improves explanation
+        structure, worked examples, and level adaptation.
+    \item \textbf{Biology grounding adapter}: improves citation
+        discipline and, most importantly given the measurements in
+        Chapter~4, the model's willingness to refuse a question when the
+        available evidence does not support an answer, trained explicitly
+        on curated refusal examples rather than left to emerge from prose
+        exposure alone.
+    \item \textbf{Biology critic adapter} (optional, later): a
+        distilled, local replacement for the external critic, once enough
+        approved critic judgements have been collected to train one.
+\end{enumerate}
+
+The concrete procedure follows six steps, in order:
+
+\begin{enumerate}
+    \item Curate several thousand high-quality instruction examples,
+        weighted deliberately toward refusal and grounding demonstrations
+        rather than pure factual recall.
+    \item Hold out a strict evaluation split that never touches training.
+    \item Configure and run a QLoRA pilot at a small scale first.
+    \item Compare the adapter against the base model on the existing
+        441-question benchmark under the \texttt{finetuned\_rag} system
+        slot already built into the evaluation harness (Section~\ref{3.8}).
+    \item Explicitly check for catastrophic degradation on questions the
+        base model already answered correctly, since a fine-tune that
+        fixes hallucination while breaking factual recall would not be a
+        net improvement.
+    \item Only then integrate adapter selection into the routing layer.
+\end{enumerate}
+
+An initial instruction-tuning target of five thousand to twenty thousand
+curated examples is planned, consistent with the sizing argument above,
+with quality prioritised over reaching any particular quantity.
+
+\section{Future Scope: Generalising Beyond Biology}\label{5.4}
+
+Biology was chosen as the first domain because it is broad enough to
+exercise every stage of the architecture while remaining a single,
+well-scoped subject for an initial build. Nothing in the architecture
+itself (the router, the hybrid retrieval stack, the verification
+composition pattern, the critic interface, or the benchmark methodology)
+is biology-specific in its \emph{shape}. What is biology-specific is the
+content plugged into each stage: the corpus, the router's subdomain
+labels, the specific deterministic checkers, and the benchmark questions.
+The long-term vision for this project is therefore not to build a second,
+separate system for each new subject, but to factor out a \textbf{shared
+core} and let each new subject be added as a self-contained plugin.
+
+\subsection{A Modular Plugin Interface}\label{5.4.1}
+
+Each future domain module is intended to define the same seven artefacts
+biology already has, and nothing else:
+
+\begin{center}
+\footnotesize\ttfamily
+\begin{tabular}{@{}ll@{}}
+domain name & e.g.\ ``coding'', ``mathematics'', ``physics'' \\
+corpus & domain-specific retrieval material, acquired and verified \\
+router labels & task types and subdomains specific to the field \\
+prompt templates & teaching-mode structures for the subject \\
+verification tools & the deterministic checkers that make sense here \\
+evaluation dataset & a benchmark with machine-checkable answer keys \\
+optional LoRA adapter & a domain-adapted version of the base model \\
+dashboard metrics & what the ablation and evaluation pages show \\
+\end{tabular}
+\end{center}
+
+The core insight carried over from biology is that \textbf{a checker
+should recompute, not merely pattern-match}, wherever the domain allows
+it, exactly as SymPy recomputes a genetics ratio instead of reading it
+off the model's stated working, and exactly as Biopython checks a codon
+against the actual genetic code table instead of trusting the model's
+claim about it. This principle turns out to generalise unusually well to
+other STEM subjects, several of which are naturally \emph{more}
+amenable to deterministic checking than biology is.
+
+\subsection{Candidate Modules}\label{5.4.2}
+
+\textbf{Mathematics.} The most natural next module, since SymPy
+\cite{meurer2017sympy} is already a core dependency of the biology
+verifier. A mathematics module would parse a stated equation or proof step
+and re-derive it symbolically, checking not just a final numeric answer
+but the validity of each intermediate step, a strictly stronger form of
+verification than anything currently possible for a free-text biology
+explanation, because mathematical claims are, unlike most biological ones,
+usually fully formalisable.
+
+\textbf{Physics.} A physics module would carry a formula database, a
+dimensional-analysis checker (verifying that a stated quantity's units are
+even physically possible for what it claims to measure, directly
+analogous to the unit-magnitude checker already built for biology,
+Section~\ref{3.6}), and a numerical solver for standard problem types.
+
+\textbf{Coding.} A coding module changes what ``retrieval'' and
+``verification'' mean rather than removing them: the corpus becomes source
+repositories and documentation, chunking becomes code-aware (splitting on
+function and class boundaries rather than token windows), and the
+verification layer becomes an actual runtime sandbox running the
+project's existing test suite or a generated one via \texttt{pytest},
+plus static linting. This is verification that does not approximate
+correctness but \emph{executes} it, which is an even stronger guarantee
+than anything deterministic recomputation offers in biology.
+
+\textbf{Logic.} A logic module would use constraint solvers and symbolic
+reasoning engines to check multi-step deductive arguments for internal
+consistency, and to detect contradictions across a chain of stated
+premises, a symbolic, guaranteed-sound counterpart to the statistical
+natural-language-inference contradiction check built for biology
+(Section~\ref{4.6.3}).
+
+\subsection{Why This Specific Order}\label{5.4.3}
+
+Mathematics and physics are prioritised over coding and logic in the
+near term because they reuse SymPy and the dimensional-analysis pattern
+that already exist, and because their claims are more often fully
+verifiable by recomputation, the strongest and cheapest form of
+verification this project has found and the one every measurement in
+Chapter~4 shows is worth building wherever it is possible. Coding is the
+module where the architecture generalises furthest beyond biology's
+pattern, since ``does this code actually run and pass its tests'' is a
+categorically stronger check than anything text-based verification can
+offer, and is a natural medium-term target once the shared core is
+factored out cleanly enough to support it.
+
+\section{Final Positioning}\label{5.5}
+
+AURA-Bio should be understood as a transparent, evidence-grounded,
+adaptive biology tutoring system that combines a lightweight local
+language model with a curated corpus, hybrid retrieval, learner-aware
+pedagogy routing, biological verification, structured critique, and
+evaluation-driven improvement. It should not be understood as a biology
+chatbot, as a general-purpose conversational assistant with a biology
+skin, or as a fully autonomous teaching system that replaces a human
+instructor. Its central contribution, argued and measured throughout this
+report, is that a lightweight local model can be made more reliable, more
+adaptive, and more educationally useful through system-level architecture
+rather than through model scale alone, and that this claim is only worth
+making when it is backed by a benchmark honest enough to show where the
+architecture is helping and where it is not.
+
+\section{Concluding Remarks}\label{5.6}
+
+The most valuable outcome of this internship was not a single accuracy
+number. It was building an evaluation methodology rigorous enough to show,
+repeatedly and specifically, when an intuitively reasonable design
+decision was quietly making the system worse, and then having the
+discipline to trust that measurement over the intuition. A small language
+model, it turns out, already knows a great deal of biology. What it cannot
+do on its own is show its working, admit what it does not know, or prove
+that it checked its own arithmetic. Building the system that lets it do
+all three, and proving with real numbers that each piece of that system
+earns its place, is the work this report describes, complete end to end
+and clearly scoped, in Sections~\ref{5.3} and~\ref{5.4}, for what comes
+next.
