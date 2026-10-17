@@ -38,6 +38,7 @@ a dozen claims is the trade the reranker already taught us not to make.
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -103,12 +104,26 @@ class EntailmentScorer:
     ) -> None:
         self.model_name = model_name
         self.device = device or os.environ.get("AURA_NLI_DEVICE") or "cpu"
-        self.batch_size = batch_size
+        self.batch_size = int(os.environ.get("AURA_NLI_BATCH") or batch_size)
         # Scoring every claim against every passage is quadratic and mostly
         # wasted; the highest-overlap passages are where agreement or conflict
-        # will be found.
-        self.max_passages = max_passages
+        # will be found. This is the single biggest lever on verification cost,
+        # which is why it is tunable: entailment dominates request latency, and
+        # halving the passages roughly halves it at some loss of recall on
+        # contradictions buried in a lower-ranked passage.
+        self.max_passages = int(os.environ.get("AURA_NLI_MAX_PASSAGES") or max_passages)
         self._pipe: Any = None
+        self._lock = threading.RLock()
+
+    def release(self) -> bool:
+        """Drop idle weights without interrupting an active inference batch."""
+        with self._lock:
+            loaded = self._pipe is not None
+            self._pipe = None
+        if loaded:
+            import gc
+            gc.collect()
+        return loaded
 
     @property
     def available(self) -> bool:
@@ -119,9 +134,16 @@ class EntailmentScorer:
         return self._pipe is not None
 
     def _load(self) -> Any:
+        from ..resources import MODEL_PHASE_LOCK
+        with MODEL_PHASE_LOCK, self._lock:
+            return self._load_locked()
+
+    def _load_locked(self) -> Any:
         if self._pipe is None:
             if os.environ.get("AURA_NLI", "").lower() in {"off", "0", "false"}:
                 raise RuntimeError("NLI disabled via AURA_NLI")
+            from ..resources import guard_cpu_model_load
+            guard_cpu_model_load('NLI verification model')
             os.environ.setdefault("USE_TF", "0")
             os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
             # HF_HOME lives in .env and points at D:. Without it the cache
@@ -147,16 +169,34 @@ class EntailmentScorer:
     def score(self, premise: str, hypotheses: Sequence[str]) -> list[dict[str, float]]:
         """Probabilities per hypothesis against one premise."""
 
+        return self.score_pairs([(premise, hypothesis) for hypothesis in hypotheses])
+
+    def score_pairs(self, pairs: Sequence[tuple[str, str]]) -> list[dict[str, float]]:
+        """Probabilities for arbitrary ``(premise, hypothesis)`` pairs, batched.
+
+        :func:`entail_claims` compares one claim against several *different*
+        passages, so every pair carries a different premise. The older
+        single-premise entry point could not express that, and calling it once
+        per passage meant one forward pass per pair with ``batch_size`` never
+        engaging. Measured on a real request that was 72 single-item passes and
+        **79% of the request's total latency** — far more than generation.
+        """
+
+        from ..resources import MODEL_PHASE_LOCK
+        with MODEL_PHASE_LOCK, self._lock:
+            return self._score_pairs_locked(pairs)
+
+    def _score_pairs_locked(self, pairs: Sequence[tuple[str, str]]) -> list[dict[str, float]]:
         import torch
 
         tokenizer, model = self._load()
-        results: list[dict[str, float]] = []
         labels = {v.lower(): k for k, v in model.config.id2label.items()}
-        for start in range(0, len(hypotheses), self.batch_size):
-            batch = list(hypotheses[start: start + self.batch_size])
+        results: list[dict[str, float]] = []
+        for start in range(0, len(pairs), self.batch_size):
+            chunk = list(pairs[start: start + self.batch_size])
             encoded = tokenizer(
-                [premise[:MAX_PREMISE_CHARS]] * len(batch),
-                batch,
+                [premise[:MAX_PREMISE_CHARS] for premise, _ in chunk],
+                [hypothesis for _, hypothesis in chunk],
                 return_tensors="pt",
                 truncation=True,
                 max_length=512,
@@ -164,18 +204,17 @@ class EntailmentScorer:
             )
             with torch.no_grad():
                 logits = model(**encoded).logits
-            probabilities = torch.softmax(logits, dim=-1)
-            for row in probabilities:
-                results.append(
-                    {
-                        name: float(row[index])
-                        for name, index in labels.items()
-                    }
-                )
+            for row in torch.softmax(logits, dim=-1):
+                results.append({name: float(row[index]) for name, index in labels.items()})
         return results
 
 
 _SCORER: EntailmentScorer | None = None
+
+
+def release_default_scorer() -> bool:
+    """Release an existing NLI allocation; never load a model merely to release it."""
+    return _SCORER.release() if _SCORER is not None else False
 
 
 def default_scorer() -> EntailmentScorer:
@@ -204,12 +243,32 @@ def entail_claims(
     if not claims or not evidence:
         return []
     scorer = scorer or default_scorer()
-    results: list[EntailmentResult] = []
-    for claim in claims:
-        ranked = sorted(evidence, key=lambda p: _overlap(claim, p.text), reverse=True)
-        best: EntailmentResult | None = None
-        for passage in ranked[: scorer.max_passages]:
-            scores = scorer.score(passage.text, [claim])[0]
+
+    # Passages per claim, highest lexical overlap first.
+    ranked_for: list[list[EvidencePassage]] = [
+        sorted(evidence, key=lambda p: _overlap(claim, p.text), reverse=True)[: scorer.max_passages]
+        for claim in claims
+    ]
+    best: list[EntailmentResult | None] = [None] * len(claims)
+    settled: list[bool] = [False] * len(claims)
+
+    # Evaluated in rounds: round r compares every still-unsettled claim against
+    # its r-th best passage. This keeps the original's early exit — a claim
+    # stops as soon as one passage supports it — while letting every claim in a
+    # round share one batched forward pass. Scoring claim-by-claim instead ran
+    # one forward pass per pair and dominated request latency.
+    for round_index in range(scorer.max_passages):
+        pending = [
+            index
+            for index in range(len(claims))
+            if not settled[index] and round_index < len(ranked_for[index])
+        ]
+        if not pending:
+            break
+        scored = scorer.score_pairs(
+            [(ranked_for[index][round_index].text, claims[index]) for index in pending]
+        )
+        for index, scores in zip(pending, scored):
             entailment = scores.get("entailment", 0.0)
             neutral = scores.get("neutral", 0.0)
             contradiction = scores.get("contradiction", 0.0)
@@ -218,23 +277,24 @@ def entail_claims(
                 key=lambda item: item[1],
             )[0]
             candidate = EntailmentResult(
-                claim=claim, label=label, entailment=entailment, neutral=neutral,
-                contradiction=contradiction, chunk_id=passage.chunk_id,
+                claim=claims[index], label=label, entailment=entailment, neutral=neutral,
+                contradiction=contradiction, chunk_id=ranked_for[index][round_index].chunk_id,
             )
+            current = best[index]
             # A claim only needs one passage to support it, so the best
             # entailment wins; but a confident contradiction is worth surfacing
             # even when another passage is merely neutral.
-            if best is None:
-                best = candidate
-            elif candidate.support is Support.CONTRADICTORY and best.support is not Support.CONTRADICTORY:
-                best = candidate
-            elif candidate.entailment > best.entailment and best.support is not Support.CONTRADICTORY:
-                best = candidate
-            if best.support is Support.SUPPORTED:
-                break
-        if best is not None:
-            results.append(best)
-    return results
+            if current is None:
+                best[index] = candidate
+            elif candidate.support is Support.CONTRADICTORY and current.support is not Support.CONTRADICTORY:
+                best[index] = candidate
+            elif candidate.entailment > current.entailment and current.support is not Support.CONTRADICTORY:
+                best[index] = candidate
+            chosen = best[index]
+            if chosen is not None and chosen.support is Support.SUPPORTED:
+                settled[index] = True
+
+    return [result for result in best if result is not None]
 
 
 def claims_from_entailment(results: Sequence[EntailmentResult]) -> list[Claim]:

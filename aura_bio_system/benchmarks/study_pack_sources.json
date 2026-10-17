@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "frozen_on": "2026-10-06",
+  "bank_sha256": "0824be4418ba584b34499e91b55a6fb5e41ccee097820bcbc90ceacc6d477336",
+  "description": "Grounding development bank, not a held-out scientific accuracy claim. 20 supported, 10 absent, 8 multi-unit; all source text is original fictional teaching material.",
+  "sources": [
+    {"fixture_id": "course-protocol", "filename": "course-protocol.md", "sha256": "18307ffb7f7a1f737a59b04ba03b7b0c869fab47adcaae1ab3e39e02a5f2b176", "author": "AURA project", "fictional": true, "license": "project licence"},
+    {"fixture_id": "biology-fiction", "filename": "biology-fiction.md", "sha256": "dca1f6242e1681a9ede034984ac1440b6071d7d930a1ab80afd799f21ea1d2fb", "author": "AURA project", "fictional": true, "license": "project licence"}
+  ],
+  "excluded_source": {
+    "title": "OpenStax Biology 2e chapter 6", "url": "https://openstax.org/books/biology-2e/pages/6-introduction",
+    "checked_on": "2026-10-06", "license": "CC BY-NC-SA 4.0 with explicit AI-ingestion permission requirement",
+    "reason": "Current source terms require prior written permission for AI ingestion. No chapter was downloaded, embedded or used for this bank.",
+    "sha256": null
+  }
+}

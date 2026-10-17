@@ -17,7 +17,7 @@ from .checkers import (
     split_claims,
 )
 from .numerical import verify_numerical
-from .schema import Support, VerificationReport
+from .schema import Support, VerificationReport, Issue
 
 #: Levels for which an unexpanded abbreviation is a real comprehension barrier.
 _EXPANSION_LEVELS = frozenset(
@@ -89,6 +89,8 @@ class BiologyVerifier:
         question: str | None = None,
     ) -> VerificationReport:
         report = VerificationReport()
+        if not answer.strip():
+            report.issues.append(Issue("generation", "empty_answer", "Supply an answer to the question.", "error"))
         query = question if question is not None else (route.query if route else "")
 
         claims = split_claims(answer)
@@ -124,7 +126,7 @@ class BiologyVerifier:
                     )
 
         if self.check_biochemistry:
-            report.issues.extend(self._biochemistry(answer))
+            report.issues.extend(self._biochemistry(answer, report))
 
         if self.check_ontology:
             report.issues.extend(self._ontology(answer))
@@ -146,15 +148,20 @@ class BiologyVerifier:
 
                 results = entail_claims(claims, evidence)
                 if results:
+                    report.support_backend = "nli"
                     report.issues.extend(check_entailment(results))
                     return claims_from_entailment(results)
-            except Exception:
+            except Exception as exc:
                 # No model, no torch, no network — fall back rather than fail
                 # the request (SRS 18.3).
-                pass
+                report.checker_status["nli"] = "unavailable: " + type(exc).__name__
+                from ..resources import MemoryPressureError
+                if isinstance(exc, MemoryPressureError):
+                    report.issues.append(Issue('nli', 'memory_pressure', str(exc), 'warning'))
+        report.support_backend = "lexical"
         return check_claim_support(claims, evidence)
 
-    def _biochemistry(self, answer: str) -> list:
+    def _biochemistry(self, answer: str, report: VerificationReport) -> list:
         issues: list = []
         from .chemistry import check_chemical_equations, check_units
         from .pathways import check_pathway_stoichiometry
@@ -164,7 +171,9 @@ class BiologyVerifier:
                       check_pathway_stoichiometry):
             try:
                 issues.extend(check(answer))
-            except Exception:
+                report.checker_status[check.__name__] = "ran"
+            except Exception as exc:
+                report.checker_status[check.__name__] = "unavailable: " + type(exc).__name__
                 continue
         return issues
 

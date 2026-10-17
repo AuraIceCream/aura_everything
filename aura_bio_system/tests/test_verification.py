@@ -263,6 +263,45 @@ class UncertaintyTests(unittest.TestCase):
 
 
 class NumericalTests(unittest.TestCase):
+    def test_correct_final_number_does_not_hide_a_wrong_allele_frequency(self) -> None:
+        question = "If 16% show a recessive trait under Hardy-Weinberg equilibrium, find heterozygote frequency."
+        answer = ("The frequency of the recessive allele (q) is 0.16. "
+                  "q = 0.4; p = 0.6; 2pq = 0.48.")
+        report = BiologyVerifier(use_entailment=False).verify(answer, [], question=question)
+        self.assertEqual(report.decision(), "revise")
+        self.assertTrue(any(c["quantity"] == "q" and c["verdict"] == "incorrect"
+                            for c in report.numerical))
+
+    def test_conflicting_final_quantity_is_not_matched_to_only_the_correct_occurrence(self) -> None:
+        checks = verify_numerical(
+            "If 16% show a recessive trait under Hardy-Weinberg equilibrium, find heterozygote frequency.",
+            "q = 0.4; p = 0.6; 2pq = 0.48. Therefore 2pq = 0.32.")
+        self.assertTrue(any(c.quantity == "2pq" and c.verdict == "incorrect" for c in checks))
+
+    def test_consistent_named_values_pass(self) -> None:
+        checks = verify_numerical(
+            "If 16% show a recessive trait under Hardy-Weinberg equilibrium, find heterozygote frequency.",
+            "q^2 = 0.16; q = 0.4; p = 0.6; 2pq = 0.48.")
+        self.assertFalse(any(c.verdict == "incorrect" for c in checks))
+
+    def test_rejected_wrong_value_is_not_treated_as_an_assertion(self) -> None:
+        checks = verify_numerical(
+            "If 16% show a recessive trait under Hardy-Weinberg equilibrium, find heterozygote frequency.",
+            "Do not use q = 0.16. Instead q = 0.4, p = 0.6, and 2pq = 0.48.")
+        self.assertFalse(any(c.verdict == "incorrect" for c in checks))
+
+    def test_expression_prefix_and_sum_are_not_scalar_assignments(self) -> None:
+        checks = verify_numerical(
+            "If 16% show a recessive trait under Hardy-Weinberg equilibrium, find heterozygote frequency.",
+            "p + q = 1. q = 1 - p. q = 0.4; p = 0.6; 2pq = 0.48.")
+        self.assertFalse(any(c.verdict == "incorrect" for c in checks))
+
+    def test_named_percentage_is_compared_as_a_fraction(self) -> None:
+        checks = verify_numerical(
+            "If 16% show a recessive trait under Hardy-Weinberg equilibrium, find heterozygote frequency.",
+            "The recessive allele frequency (q) is 40%. p = 60%; 2pq = 48%.")
+        self.assertFalse(any(c.verdict == "incorrect" for c in checks))
+
     def test_hardy_weinberg_correct_answer(self) -> None:
         checks = verify_numerical(
             "In a Hardy-Weinberg population, 16% of individuals are homozygous recessive. "

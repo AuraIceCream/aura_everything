@@ -5,6 +5,9 @@ import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { clsx } from "clsx";
 import type { Answer, Citation, Confidence, VerificationStatus } from "../types";
+import { useState } from 'react';
+import { locatorLabel, StudySourcePreview } from './study-source';
+import {AnswerVisual} from './answer-visuals/AnswerVisual';
 
 export function StatusPill({
   tone = "neutral",
@@ -57,14 +60,15 @@ export function PageHeader({
   );
 }
 
-export function AnswerView({ answer, markdown, onCitation }: { answer?: Answer; markdown: string; onCitation: (id: string) => void }) {
+export function AnswerView({ answer, markdown, onCitation, privateEvidence = false }: { answer?: Answer; markdown: string; onCitation: (id: string) => void; privateEvidence?: boolean }) {
+  const privateOutput = privateEvidence || !!answer?.citations.some((citation) => citation.pack_id);
   return (
     <article className="answer-card" aria-live="polite">
       <div className="answer-card__heading">
         <div className="assistant-mark"><span>A</span></div>
         <div>
           <strong>AURA response</strong>
-          <span>Evidence-grounded biology tutor</span>
+          <span>{privateOutput ? 'Pack-grounded study answer' : 'Evidence-grounded biology tutor'}</span>
         </div>
         {answer && <StatusPill tone={answer.verification_status === "verified" ? "success" : "warning"}>{answer.verification_status}</StatusPill>}
       </div>
@@ -73,6 +77,7 @@ export function AnswerView({ answer, markdown, onCitation }: { answer?: Answer; 
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeSanitize]}
           components={{
+            img: ({ src, alt }) => privateOutput ? <span>[Image not fetched: {alt || 'source image'}]</span> : <img src={src} alt={alt} />,
             a: ({ href, children }) => {
               if (href?.startsWith("#citation-")) {
                 const id = href.replace("#citation-", "");
@@ -86,6 +91,7 @@ export function AnswerView({ answer, markdown, onCitation }: { answer?: Answer; 
           {markdown || "Preparing a grounded response…"}
         </ReactMarkdown>
       </div>
+      {answer?.visuals?.slice(0,1).map((visual,index)=><AnswerVisual key={`${visual.spec?.id??index}-${answer.markdown}`} visual={visual} onCitation={onCitation}/>)}
       {answer && (
         <div className="answer-footer">
           <div className="answer-signals">
@@ -118,6 +124,7 @@ export function CitationDrawer({
   onOpenChange: (open: boolean) => void;
   developerMode: boolean;
 }) {
+  const [sourceUnit, setSourceUnit] = useState<{ pack: string; doc: string; unit: string } | null>(null);
   const ordered = selectedId
     ? [...citations].sort((a, b) => Number(b.citation_id === selectedId) - Number(a.citation_id === selectedId))
     : citations;
@@ -143,6 +150,11 @@ export function CitationDrawer({
                   <StatusPill tone="info">{citation.source_type}</StatusPill>
                 </div>
                 <blockquote>{citation.excerpt}</blockquote>
+                {citation.pack_id && citation.document_id && <div className="study-citation-locations">
+                  <p>{citation.locators?.map(locatorLabel).join(' · ')}</p>
+                  {citation.unit_ids?.map((unit, index) => <button key={unit} onClick={() => setSourceUnit({ pack: citation.pack_id!, doc: citation.document_id!, unit })}>Open original unit {index + 1}</button>)}
+                  {sourceUnit?.pack === citation.pack_id && sourceUnit.doc === citation.document_id && citation.unit_ids?.includes(sourceUnit.unit) && <StudySourcePreview pack={sourceUnit.pack} doc={sourceUnit.doc} unitId={sourceUnit.unit} />}
+                </div>}
                 <div className="score-row">
                   {citation.dense_score != null && <span>Dense <strong>{citation.dense_score.toFixed(2)}</strong></span>}
                   {citation.rerank_score != null && <span>Rerank <strong>{citation.rerank_score.toFixed(2)}</strong></span>}
@@ -171,4 +183,3 @@ export function Toggle({ checked, onCheckedChange, label, description }: { check
     </label>
   );
 }
-

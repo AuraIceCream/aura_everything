@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "bank": "visual_output_bank_v1.jsonl",
+  "sha256": "e5bc736d704d49803b3059f6684cef184326bf28c1d863780af63957679d28d4",
+  "frozen_on": "2026-10-14",
+  "total": 12,
+  "answerable": 9,
+  "controls": 3,
+  "minimum_valid_positive": 7,
+  "minimum_per_kind": 1,
+  "purpose": "Frozen synthetic contract/rendering bank; not evidence of real-model visual accuracy.",
+  "manual_review_required_for_release": true
+}

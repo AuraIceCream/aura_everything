@@ -1,17 +1,29 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle2, Database, FileStack, HardDrive, Layers3, RefreshCw, SearchCheck, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
-import { Metric, PageHeader, ProgressBar, StatusPill } from "../components/ui";
+import { Metric, ProgressBar, StatusPill } from "../components/ui";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 const format = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 const formatBytes = (value: number) => `${(value / 1024 ** 3).toFixed(1)} GiB`;
 
-export function CorpusPage() {
+/**
+ * Corpus readiness, rendered inside the retrieval page.
+ *
+ * Retrieval and the corpus it searches are one subject, so they share a page
+ * and a heading rather than sitting in separate nav entries.
+ */
+export function CorpusSection() {
   const status = useQuery({ queryKey: ["corpus-status"], queryFn: api.corpusStatus, refetchInterval: 10_000 });
   return (
-    <div className="page-stack">
-      <PageHeader eyebrow="Corpus readiness" title="From source files to searchable evidence" description="Track each transformation without mixing downloaded, canonical, chunked, and indexed data." action={<button className="secondary-button" onClick={() => status.refetch()}><RefreshCw size={15} />Refresh</button>} />
+    <div className="page-stack corpus-section">
+      <div className="section-divider">
+        <div>
+          <span className="eyebrow">Corpus readiness</span>
+          <h2>What retrieval is searching</h2>
+        </div>
+        <button className="secondary-button" onClick={() => status.refetch()}><RefreshCw size={15} />Refresh</button>
+      </div>
       {status.data && <>
         <section className="readiness-banner"><div className="readiness-icon"><Layers3 size={24} /></div><div><span className="eyebrow">Current capability</span><h2>Sparse and pilot dense retrieval are available</h2><p>Chunking is still in progress. Queries use only indexed sources, and coverage is shown with every answer.</p></div><StatusPill tone="warning"><AlertCircle size={13} /> Partial index</StatusPill></section>
         <section className="metrics-grid"><Metric label="Source families" value={String(status.data.totals.sources)} helper="All licence-reviewed" /><Metric label="Canonical records" value={format.format(status.data.totals.documents)} helper="Parsed and cleaned" /><Metric label="Retrieval chunks" value={format.format(status.data.totals.chunks)} helper={`${status.data.stages.chunking}% generated`} /><Metric label="Processed storage" value={formatBytes(status.data.totals.bytes)} helper="Across G: and D:" /></section>

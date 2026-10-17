@@ -31,6 +31,7 @@ class Critique:
     model: str = "none"
     trusted: bool = True
     raw: str | None = None
+    failure_kind: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -44,6 +45,7 @@ class Critique:
             "decision": self.decision,
             "model": self.model,
             "trusted": self.trusted,
+            "failure_kind": self.failure_kind,
         }
 
 
@@ -65,8 +67,11 @@ def parse_critique(payload: str, model: str = "unknown") -> Critique:
             model=model,
             trusted=False,
             raw=payload[:2000],
+            failure_kind="invalid_response",
         )
     decision = str(data.get("decision", "accept")).strip().lower()
+    trusted = (isinstance(data.get("answer_supported"), bool)
+               and isinstance(data.get("decision"), str) and decision in _DECISIONS)
     if decision not in _DECISIONS:
         decision = "revise"
     try:
@@ -74,7 +79,7 @@ def parse_critique(payload: str, model: str = "unknown") -> Critique:
     except (TypeError, ValueError):
         score = 3
     return Critique(
-        answer_supported=bool(data.get("answer_supported", False)),
+        answer_supported=data.get("answer_supported") is True,
         unsupported_claims=_strings(data.get("unsupported_claims")),
         terminology_errors=_strings(data.get("terminology_errors")),
         process_errors=_strings(data.get("process_errors")),
@@ -83,7 +88,8 @@ def parse_critique(payload: str, model: str = "unknown") -> Critique:
         teaching_quality_score=max(1, min(5, score)),
         decision=decision,
         model=model,
-        trusted=True,
+        trusted=trusted,
+        failure_kind=None if trusted else "invalid_schema",
         raw=None,
     )
 
@@ -132,8 +138,9 @@ def combine_decision(report: VerificationReport, critique: Critique | None) -> s
     if critique is None:
         return "accept"
     if not critique.trusted:
-        return "accept"
-    if critique.decision in ("revise", "reject"):
+        return "degraded"
+    if (critique.decision in ("revise", "reject") or not critique.answer_supported
+            or critique.unsupported_claims or critique.terminology_errors or critique.process_errors):
         return "revise"
     return "accept"
 
@@ -160,7 +167,8 @@ class RevisionRecord:
         }
 
 
-def revision_instructions(report: VerificationReport, critique: Critique | None) -> tuple[str, ...]:
+def revision_instructions(report: VerificationReport, critique: Critique | None,
+                          *, require_citations: bool = True) -> tuple[str, ...]:
     """Turn findings into concrete edits, so revision is targeted not vague."""
 
     instructions: list[str] = []
@@ -179,12 +187,26 @@ def revision_instructions(report: VerificationReport, critique: Critique | None)
                 f"Correct this claim, which the retrieved evidence contradicts: "
                 f"{claim.text[:160]!r}"
             )
-    if report.citation_coverage == 0.0 and report.claims:
+    if require_citations and report.citation_coverage == 0.0 and report.claims:
         instructions.append("Cite the supplied passages as [1], [2] where they back a statement.")
     if critique is not None and critique.trusted:
+        for claim in critique.unsupported_claims:
+            instructions.append(
+                f"Check this claim against the supplied passages and correct it or "
+                f"qualify it if no source establishes it: {claim}"
+            )
+        for error in critique.terminology_errors:
+            instructions.append(f"Correct this terminology error: {error}")
+        for error in critique.process_errors:
+            instructions.append(f"Correct this process error: {error}")
         for concept in critique.missing_concepts:
             instructions.append(f"Cover the missing concept: {concept}")
         if not critique.academic_level_match:
             instructions.append("Re-pitch the explanation at the requested academic level.")
+        if critique.decision in ("revise", "reject") and not instructions:
+            instructions.append(
+                "Review the answer against the question and sources. Correct any "
+                "unsupported statements and supply the missing explanation."
+            )
     # Duplicated instructions make the revision prompt worse, not better.
     return tuple(dict.fromkeys(instructions))

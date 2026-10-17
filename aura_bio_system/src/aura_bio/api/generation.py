@@ -22,6 +22,10 @@ from ..generation import build_prompt
 from ..routing.schema import Route, TeachingMode
 
 
+class ModelHandoffError(RuntimeError):
+    """A completed generation could not safely hand memory to the next stage."""
+
+
 def _sentences(text: str) -> list[str]:
     parts = re.split(r"(?<=[.!?])\s+", text.strip())
     return [p.strip() for p in parts if len(p.strip()) > 20]
@@ -44,6 +48,7 @@ class ExtractiveGenerator:
         instructions: Sequence[str],
         coverage_pool: Sequence[Any] = (),
         unknown_entities: Sequence[str] = (),
+        previous_answer: str = "",
     ) -> str:
         if not evidence:
             return (
@@ -96,10 +101,9 @@ class OllamaGenerator:
     Constructed only when a model is actually configured, so importing the API
     never requires Ollama to be installed or running.
 
-    Thinking is disabled: the default AURA model is Qwen 3.5, whose reasoning
-    tokens would otherwise consume the whole generation budget and return an
-    empty message (``done_reason: length``). The tutor answer is what we want,
-    not the scratchpad.
+    Thinking is off by default. Explicit per-request thinking uses a larger,
+    bounded generation budget; reasoning is not returned as tutor evidence.
+    Exhausting that budget remains an error, never a partial certified answer.
 
     ``num_gpu`` forces full GPU offload; see the inline note where it is sent.
 
@@ -123,7 +127,23 @@ class OllamaGenerator:
         think: bool = False,
         retries: int = 2,
         num_gpu: int = 99,
+        keep_alive: int | str | None = None,
+        prompt_profile: str = "standard",
+        seed: int | None = None,
+        prompt_builder: Any = None,
+        num_batch: int | None = None,
+        response_schema: dict[str, Any] | None = None,
+        use_mmap: bool | None = None,
+        visual_proposal_version: int = 2,
     ) -> None:
+        if type(visual_proposal_version) is not int or visual_proposal_version not in (1, 2):
+            raise ValueError('Unknown visual proposal contract version')
+        self.visual_proposal_version = visual_proposal_version
+        if num_batch is not None and (isinstance(num_batch, bool) or not isinstance(num_batch, int) or num_batch <= 0):
+            raise ValueError("num_batch must be a positive integer or None")
+        self.num_batch = num_batch
+        self.use_mmap = use_mmap
+        self.response_schema = response_schema
         self.model_name = model
         self.host = host.rstrip("/")
         self.num_predict = num_predict
@@ -132,6 +152,11 @@ class OllamaGenerator:
         self.think = think
         self.retries = retries
         self.num_gpu = num_gpu
+        self.keep_alive = keep_alive
+        self.prompt_profile = prompt_profile
+        self.seed = seed
+        self.prompt_builder = prompt_builder
+        self.last_metadata: dict[str, Any] = {}
         #: Answers that only succeeded after dropping full-GPU offload. Their
         #: latency is not comparable to a run where every answer was fully
         #: offloaded, so a run that reports any of these should say so.
@@ -159,11 +184,30 @@ class OllamaGenerator:
         instructions: Sequence[str],
         coverage_pool: Sequence[Any] = (),
         unknown_entities: Sequence[str] = (),
+        previous_answer: str = "",
+    ) -> str:
+        from ..resources import MODEL_PHASE_LOCK
+        with MODEL_PHASE_LOCK:
+            return self._generate(route, evidence, instructions, coverage_pool,
+                                  unknown_entities, previous_answer)
+
+    def _generate(
+        self,
+        route: Route,
+        evidence: Sequence[Any],
+        instructions: Sequence[str],
+        coverage_pool: Sequence[Any] = (),
+        unknown_entities: Sequence[str] = (),
+        previous_answer: str = "",
     ) -> str:
         import json
         import urllib.request
 
-        prompt = build_prompt(route, evidence, instructions, coverage_pool, unknown_entities)
+        if self.prompt_builder is not None:
+            prompt = self.prompt_builder(route, evidence, instructions, coverage_pool, unknown_entities, previous_answer)
+        else:
+            prompt = build_prompt(route, evidence, instructions, coverage_pool, unknown_entities, previous_answer,
+                                  profile=self.prompt_profile)
 
         def payload_for(num_gpu: int | None) -> bytes:
             options: dict[str, object] = {
@@ -180,15 +224,26 @@ class OllamaGenerator:
                 # here meant the baseline generated at twice the pipeline's
                 # speed for reasons that had nothing to do with either.
                 options["num_gpu"] = num_gpu
-            return json.dumps(
-                {
+            if self.seed is not None:
+                options["seed"] = self.seed
+            if self.num_batch is not None:
+                # Bound prompt-processing scratch memory independently of the
+                # context window and output budget on memory-limited hosts.
+                options["num_batch"] = self.num_batch
+            if self.use_mmap is not None:
+                options['use_mmap'] = self.use_mmap
+            payload: dict[str, object] = {
                     "model": self.model_name,
                     "messages": prompt.as_messages(),
                     "stream": False,
                     "think": self.think,
                     "options": options,
                 }
-            ).encode("utf-8")
+            if self.keep_alive is not None:
+                payload["keep_alive"] = self.keep_alive
+            if self.response_schema is not None:
+                payload["format"] = self.response_schema
+            return json.dumps(payload).encode("utf-8")
 
         # A transient stall — the model being paged back onto a 4 GiB card, or
         # another process taking the GPU — otherwise loses the whole question:
@@ -211,6 +266,8 @@ class OllamaGenerator:
         # slower, and it makes this answer's latency incomparable to the
         # baseline's, so it is counted and reported rather than hidden.
         ladder: list[int | None] = [self.num_gpu] * self.retries + [None]
+        if getattr(self, 'strict_no_fallback', False):
+            ladder = [self.num_gpu]
         last: Exception | None = None
         for attempt, num_gpu in enumerate(ladder):
             request = urllib.request.Request(
@@ -221,11 +278,64 @@ class OllamaGenerator:
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     body = json.loads(response.read().decode("utf-8"))
+                if self.response_schema is not None and body.get("done_reason") == "length":
+                    raise RuntimeError("Structured Ollama output was truncated; no unchecked answer was delivered.")
                 if num_gpu is None:
                     self.degraded_calls += 1
+                self.last_metadata = {
+                    key: body.get(key) for key in (
+                        "done_reason", "prompt_eval_count", "eval_count", "total_duration"
+                    )
+                }
+                self.last_metadata.update(model=self.model_name, num_gpu=num_gpu,
+                                          seed=self.seed, num_predict=self.num_predict, num_ctx=self.num_ctx,
+                                          num_batch=self.num_batch, think=self.think)
+                self.last_metadata['use_mmap'] = self.use_mmap
+                self.last_metadata['keep_alive'] = self.keep_alive
+                if self.keep_alive == 0:
+                    self.last_metadata['unload_wait_ms'] = self._wait_for_unload()
                 return body.get("message", {}).get("content", "").strip()
+            except ModelHandoffError:
+                raise  # Never generate an already-completed answer again for cleanup failure.
             except Exception as exc:  # timeouts, resets, truncated bodies
                 last = exc
+                from urllib.error import HTTPError
+                if isinstance(exc, HTTPError):
+                    try:
+                        details = json.loads(exc.read(8192).decode('utf-8', errors='replace')).get('error', '')
+                    except (ValueError, AttributeError):
+                        details = ''
+                    if isinstance(details, str) and details:
+                        last = RuntimeError(f'Ollama HTTP {exc.code}: {details[:1600]}')
+                        if any(reason in details.lower() for reason in (
+                                'out of memory', 'failed to allocate', 'unable to allocate',
+                                'requires more system memory', 'ggml_assert(buffer)')):
+                            raise RuntimeError(f'Ollama could not allocate model memory: {details[:1600]}. '
+                                'Free RAM/VRAM or use an explicitly configured memory profile before retrying.') from exc
                 if attempt < len(ladder) - 1:
                     time.sleep(5 * (attempt + 1))
         raise RuntimeError(f"Ollama generation failed after {len(ladder)} attempts: {last}")
+
+    def _wait_for_unload(self, timeout=10):
+        """keep_alive=0 is asynchronous; wait for our exact allocation to disappear."""
+        import json
+        import urllib.request
+        began = time.monotonic()
+        deadline = began + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ModelHandoffError('Ollama model is still resident after requested unloading; '
+                    'verification has not started. Retry when the local model is no longer busy.')
+            try:
+                request = urllib.request.Request(f'{self.host}/api/ps')
+                with urllib.request.urlopen(request, timeout=min(3, remaining)) as response:
+                    models = json.loads(response.read().decode('utf-8')).get('models')
+                if not isinstance(models, list) or any(not isinstance(model, dict) for model in models):
+                    raise ValueError('Invalid local allocation status')
+            except Exception as exc:
+                raise ModelHandoffError('Could not confirm local model unloading; '
+                    'verification has not started.') from exc
+            if not any(self.model_name in {model.get('name'), model.get('model')} for model in models):
+                return round((time.monotonic() - began) * 1000, 1)
+            time.sleep(min(.25, max(0, deadline - time.monotonic())))

@@ -8,10 +8,10 @@ import { StatusPill } from "./ui";
 
 const navigation = [
   { to: "/ask", label: "Ask AURA", icon: MessageCircleQuestion },
-  { to: "/retrieval", label: "Retrieval lab", icon: FlaskConical },
+  { to: '/study-packs', label: 'Study material', icon: BookOpen },
+  { to: "/retrieval", label: "Retrieval & corpus", icon: FlaskConical },
   { to: "/evaluation", label: "Evaluation", icon: GaugeCircle },
-  { to: "/traces/run-demo-4821", label: "Pipeline traces", icon: Activity },
-  { to: "/corpus", label: "Corpus", icon: Database },
+  { to: "/traces", label: "Pipeline traces", icon: Activity },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -20,7 +20,8 @@ export function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem("aura-sidebar-open") !== "false");
   const [sidebarPreview, setSidebarPreview] = useState(false);
   const location = useLocation();
-  const health = useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 15_000 });
+  const privateWorkspace = location.pathname === '/study-packs' || (location.pathname === '/ask' && new URLSearchParams(location.search).has('pack_id'));
+  const health = useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 15_000, enabled: !privateWorkspace });
   const status = health.data?.status ?? "offline";
   const currentPage = navigation.find((item) => location.pathname.startsWith(item.to.split("/run-")[0]))?.label ?? "AURA Bio";
 
@@ -73,9 +74,9 @@ export function AppLayout() {
           {!sidebarOpen && <button className="icon-button sidebar-open desktop-only" onMouseEnter={() => setSidebarPreview(true)} onClick={() => { setSidebarOpen(true); setSidebarPreview(false); }} aria-label="Open sidebar" title="Hover to preview · click to keep open"><Menu size={19} /></button>}
           <div className="topbar__context"><strong>{currentPage}</strong><span>Hybrid workspace</span></div>
           <div className="topbar__status">
-            <span className="model-label"><span className="pulse-dot" />Qwen 3.6 <i>·</i> GLM optional</span>
-            <StatusPill tone={status === "ready" ? "success" : status === "partial" ? "warning" : "danger"}>
-              {status === "ready" ? "System ready" : status === "partial" ? "Partial index" : "Backend offline"}
+            <span className="model-label"><span className="pulse-dot" />{privateWorkspace ? 'Local study sources' : 'Qwen 3.6'} <i>·</i> {privateWorkspace ? 'Critique opt-in' : 'GLM optional'}</span>
+            <StatusPill tone={privateWorkspace ? 'info' : status === "ready" ? "success" : status === "partial" ? "warning" : "danger"}>
+              {privateWorkspace ? 'Study-pack workspace' : status === "ready" ? "System ready" : status === "partial" ? "Partial index" : "Backend offline"}
             </StatusPill>
             <ActivityCenter />
           </div>

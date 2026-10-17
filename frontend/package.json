@@ -14,6 +14,8 @@
     "types:api": "openapi-typescript openapi/aura-bio.openapi.json -o src/generated/api.ts"
   },
   "dependencies": {
+    "dompurify": "3.4.17",
+    "mermaid": "12.2.0",
     "@radix-ui/react-dialog": "latest",
     "@radix-ui/react-switch": "latest",
     "@radix-ui/react-tabs": "latest",
@@ -41,14 +43,10 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "latest",
     "jsdom": "latest",
-    "msw": "latest",
     "openapi-typescript": "latest",
     "tailwindcss": "latest",
     "typescript": "5.9.3",
     "vite": "latest",
     "vitest": "latest"
-  },
-  "msw": {
-    "workerDirectory": ["public"]
   }
 }

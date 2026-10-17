@@ -1,11 +1,65 @@
-# AURA-Bio
+<div align="center">
 
-AURA-Bio is a local-first, evidence-grounded biology tutoring system: a small
-open-source language model is made trustworthy by the system around it rather
-than by its own scale. Every answer is routed, grounded in retrieved evidence,
-independently verified, and traced end to end.
+# 🧬 AURA-Bio
 
-Full specification in [`srs.md`](srs.md).
+### A local-first, evidence-grounded biology tutoring system
+
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Node 22.13+](https://img.shields.io/badge/Node-22.13%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![React 19](https://img.shields.io/badge/UI-React%2019-61DAFB?logo=react&logoColor=111827)](https://react.dev/)
+
+Answers pass through routing, retrieved evidence, explicit verification checks,
+and end-to-end traces. Check results and degraded/interpretive status remain
+visible; model descriptions are not independent proof. AURA-Bio earns trust
+from the system around a small local model—not from model scale alone.
+
+[Quick start](#quick-start) · [Study material](docs/study-packs.md) · [Measured results](#measured-results) · [Architecture](#system-architecture) · [Components](#components) · [Docs hub](docs/README.md) · [Troubleshooting](#troubleshooting)
+
+<img src="docs/images/aura-architecture.svg" alt="AURA-Bio architecture: question flows through routing, hybrid retrieval, generation, verification, and a traced answer." width="960" />
+
+</div>
+
+> **New here?** Run `python scripts/launcher.py` for a guided readiness check,
+> dependency setup, and local launch. The detailed manual path remains below
+> for reproducible development and headless machines.
+
+Full specification: [`srs.md`](srs.md). Start from the [documentation hub](docs/README.md) to find the runtime, pipeline, frontend, evaluation, and project-status guides.
+
+**Local study packs:** upload PDF, PPTX, XLSX, PNG/JPEG or UTF-8 text/Markdown, inspect
+page/slide/cell-aware extraction, and ask through a pack-only pipeline with
+source previews. Uploaded material stays separate from the original corpus.
+See [setup, privacy, limits and the frozen grounding evaluation](docs/study-packs.md).
+Explicit, checkpointed OCR/figure-description passes, manual crops and source
+annotations are now available. OCR/vision stays opt-in, with provenance carried
+through retrieval and citations; interpretations never verify themselves.
+See [visual setup and limits](docs/study-packs.md#visual-passes-2026-10-07).
+Ask supports question-focused figure/page references, source-backed procedures,
+comparisons, arithmetic and excerpt study guides, with optional local thinking.
+See [document question flow and limits](docs/document-question-flow.md).
+Tests are not an accuracy guarantee.
+
+## Quick start
+
+```powershell
+# From the repository root. The launcher never uploads data or starts installs
+# until you select an action in its window.
+python scripts/launcher.py
+```
+
+It discovers this checkout, checks Python, Node, the installed local packages,
+Ollama, and the retrieval index, then can install the two local dependency sets
+or launch the API and frontend. It works with the current `aura_bio_system/`,
+`corpus_pipeline/`, `aura_corpus/`, and `frontend/` layout; it does **not** rely
+on the alternative `apps/` and `packages/` layout used by the companion repository.
+
+For a non-GUI readiness report:
+
+```powershell
+python scripts/launcher.py --headless-check
+```
+
+## Components
 
 | Package | CLI | Role |
 |---|---|---|
@@ -13,6 +67,46 @@ Full specification in [`srs.md`](srs.md).
 | [`corpus_pipeline/`](corpus_pipeline) | `aura-process` | cleaning, chunking, embedding, **index building** |
 | [`aura_bio_system/`](aura_bio_system) | `aura-bio`, `aura-bio-api` | per-query **runtime**: routing, retrieval, verification, critique, tracing |
 | [`frontend/`](frontend) | `npm run dev` | Vite + React **interface**: ask, retrieval lab, evaluation, traces |
+
+## System architecture
+
+A learner question is classified for intent, level, teaching mode, and depth;
+the retrieval layer then gathers and reranks licensed evidence before the local
+generator drafts a response. Deterministic and evidence-based checks can request
+repairs before the answer, citations, and a stage-by-stage trace reach the UI.
+
+The layers degrade independently: sparse BM25 retrieval works without the dense
+index, and evidence-based extractive answers remain available when Ollama is not
+running. See the [runtime guide](aura_bio_system/README.md) for implementation
+details and the [SRS](srs.md) for the safety and pedagogical constraints.
+
+## Measured results
+
+The raw Qwen 3.5 4B model already answers much of the project's textbook-style
+biology benchmark. On a corrected, paired 50-question subset, the full pipeline
+scored higher, but the sample does not establish an accuracy improvement:
+
+| Configuration | Overall score | Concept recall |
+|---|---:|---:|
+| Raw model | 0.8757 | 0.8857 |
+| Full pipeline | 0.9030 | 0.9130 |
+
+The overall difference was +0.0273, with a reported 95% confidence interval of
+−0.021 to +0.076. Earlier comparisons also used different generation settings
+for the two configurations, so a matched rerun is needed before making a causal
+claim about retrieval. The original 0.375 adversarial "hallucination rate" was
+partly a literal-phrase scoring error: manual review found one fabricated answer
+out of eight for each configuration. These results are documented, including
+the failed hypotheses and scoring corrections, in
+[`FINDINGS.md`](aura_bio_system/benchmarks/FINDINGS.md).
+
+What the pipeline presently adds is inspectable source provenance, deterministic
+checks for biology calculations and terminology, evidence contradiction checks,
+and traceable decisions. The current implementation uses a biology-specific
+router, prompts, and verifier. Study packs provide a general text/arithmetic
+scope plus explicit visual intake; general-purpose domain plug-ins, ephemeral
+ask-with-image and visual answer generation remain separate proposed extensions.
+No fine-tuned model has been produced for this project.
 
 ---
 
@@ -27,7 +121,7 @@ backed by the real pipeline. If you only want the corpus tooling, skip to
 | Requirement | Notes |
 |---|---|
 | Python 3.11+ | 3.13 is what the project is developed against |
-| Node 18+ | for the frontend |
+| Node 22.13+ | for the frontend (the declared project engine) |
 | [Ollama](https://ollama.com) | serves the local model; optional, the API degrades to extractive answers without it |
 | ~8 GB free RAM | dense retrieval holds a ~1 GiB index plus encoders |
 | A built index | see [Building the index](#building-the-index) if you do not have one |
@@ -146,16 +240,8 @@ curl http://127.0.0.1:8000/api/v1/health
 
 ### 7. Point the frontend at the backend
 
-The frontend ships with a **mock API enabled by default** so it can be
-demonstrated standalone. To use the real pipeline you must switch mocks off.
-Create `frontend/.env.local`:
-
-```ini
-VITE_API_BASE_URL=http://127.0.0.1:8000
-VITE_USE_MOCKS=false
-```
-
-Then:
+The frontend talks to the real backend only; there is no mock or demo mode.
+Every page reads from the API, so the backend must be running first.
 
 ```powershell
 cd frontend
@@ -163,12 +249,16 @@ npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`.
+Open `http://127.0.0.1:5173`. The default API base is
+`http://127.0.0.1:8000`; override it by creating `frontend/.env.local`:
 
-> **If answers look instant and always identical, mocks are still on.** With
-> `VITE_USE_MOCKS=false` a real answer takes tens of seconds, because it is
-> actually routing, retrieving, generating, and verifying. Confirm by watching
-> the backend log for `POST /api/v1/runs`.
+```ini
+VITE_API_BASE_URL=http://127.0.0.1:8000
+```
+
+A real answer takes tens of seconds, because it is genuinely routing,
+retrieving, generating, and verifying. Panels that have no data yet say so
+rather than showing sample content.
 
 ### 8. Verify the whole path
 
@@ -203,19 +293,49 @@ unit test and no accuracy score will catch.
 | `AURA_OLLAMA_HOST` | `http://127.0.0.1:11434` | override the Ollama endpoint |
 | `AURA_CRITIC` | `glm` | `gemini`, or `off` to disable the external critic |
 | `AURA_TRACE_DB` | `<index-root>/traces.sqlite3` | trace store location |
+| `AURA_NLI` | on | `off` disables contradiction detection (fastest single saving) |
 | `HF_HOME` | from `.env` | Hugging Face cache location |
 
 ### Troubleshooting
 
 | Symptom | Cause |
 |---|---|
-| Answers instant and identical every time | `VITE_USE_MOCKS` is not `false`, or `.env.local` was not created |
+| Frontend panels are empty | Expected on a fresh backend: they show real runs, and there are none yet. Ask a question. |
 | **Browser reports a CORS error on `POST /api/v1/runs`, but `/health` works** | Almost never actually CORS. An unhandled exception is returned by Starlette's outermost error middleware, which sits *outside* the CORS middleware, so the 500 carries no `Access-Control-Allow-Origin` header and the browser blames CORS. Reproduce with `curl` (no CORS involved) and read the backend traceback. |
 | `OSError: The paging file is too small` (os error 1455) | Out of memory, **not** necessarily out of disk. The router's SapBERT+BGE encoders load lazily on the *first query*, on top of the dense index, reranker, NLI model and Ollama. See [Reducing memory use](#reducing-memory-use). |
 | Ollama returns HTTP 500 for every request | Check **system drive free space** first: with the disk full Windows cannot grow its paging file, and this surfaces as unrelated-looking failures across several components at once. |
 | `retrieval index not available` (503) | `retrieval.manifest.json` missing or `--index-root` wrong |
 | Backend starts but answers extractively | Ollama unreachable, or `AURA_GENERATOR=extractive` is set |
 | `404` on `/api/v1/runs/run-demo-...` | The sidebar's "Pipeline traces" link is hardcoded to a sample run id that only exists in mock mode. Cosmetic; the page shows an "unavailable" banner. |
+
+### Where the time goes
+
+A single answer runs several models, so it takes tens of seconds to a couple
+of minutes. Measured end to end on one real request:
+
+| Stage | Time | Share |
+|---|---:|---:|
+| routing | 0.2 s | — |
+| retrieval | 2.6 s | 1% |
+| rerank | 10.4 s | 3% |
+| generation | 56.5 s | 17% |
+| verification | 39 s | 12% |
+
+Verification originally dominated this at **259 s (79%)**, far more than
+generation. The natural-language-inference checker was being called once per
+(passage, claim) pair, so its batch size never engaged: 18 claims against 4
+passages each meant 72 single-item forward passes. Batching them by round
+made it about 7x faster with byte-identical labels.
+
+If a request is still slower than you want, in rough order of value lost:
+
+```powershell
+$env:AURA_NLI = "off"       # skips contradiction detection entirely
+$env:AURA_RERANK = "0"      # skips cross-encoder reranking (~10 s)
+```
+
+Generation itself is bounded by the local model's token rate, so the honest
+floor is roughly a minute for a full-length answer on this hardware.
 
 ### Reducing memory use
 

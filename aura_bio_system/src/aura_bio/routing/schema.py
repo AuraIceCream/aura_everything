@@ -141,11 +141,14 @@ class Route:
     rerank_k: int
     max_revisions: int
     explicit_overrides: tuple[str, ...] = ()
+    domain: str = 'biology'
+    evidence_scope: str = 'core'
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "query": self.query,
-            "domain": "biology",
+            "domain": self.domain,
+            "evidence_scope": self.evidence_scope,
             "task_type": self.task_type.as_dict(),
             "subdomain": self.subdomain.as_dict(),
             "secondary_subdomains": list(self.secondary_subdomains),
@@ -165,7 +168,8 @@ class Route:
         """The compact SRS 8.1 shape, for prompts and user-facing traces."""
 
         return {
-            "domain": "biology",
+            "domain": self.domain,
+            **({'evidence_scope': self.evidence_scope} if self.evidence_scope != 'core' else {}),
             "subdomain": self.subdomain.label,
             "task_type": self.task_type.label,
             "learner_level": self.learner_level.label,

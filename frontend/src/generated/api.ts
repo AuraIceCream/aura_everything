@@ -155,6 +155,11 @@ export interface components {
             context_depth: string;
             source_types: string[];
             allow_external_critic: boolean;
+            /**
+             * @default none
+             * @enum {string}
+             */
+            visual_output: "none" | "auto" | "source" | "diagram" | "comparison" | "procedure" | "plot";
         };
         Citation: {
             citation_id: string;
@@ -182,6 +187,7 @@ export interface components {
             revised: boolean;
             limitations: string[];
             latency_ms: number;
+            visuals?: components["schemas"]["AnswerVisualResult"][];
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -222,6 +228,414 @@ export interface components {
         RunStreamEvent: components["schemas"]["TraceEvent"] | components["schemas"]["Answer"];
         CorpusStatus: {
             [key: string]: unknown;
+        };
+        SourceVisualSpec: {
+            /** @enum {integer} */
+            version: 1;
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "SourceVisualSpec";
+            title: string;
+            description: string;
+            payload: {
+                claim_ids: string[];
+                pack_id: string;
+                document_id: string;
+                unit_id: string;
+                asset_id: string | null;
+                bbox: {
+                    x0: number;
+                    y0: number;
+                    x1: number;
+                    y1: number;
+                } | null;
+                support: {
+                    claim_ids: string[];
+                    cite_ids: string[];
+                    /** @enum {string} */
+                    status: "native_verified" | "interpreted" | "ocr_transcribed" | "user_annotated" | "native_unverified";
+                    provenance: ("native_text" | "ocr" | "vlm" | "user_annotation")[];
+                };
+                revision_id: string;
+                source_checksum: string;
+                asset_checksum: string | null;
+                generation: number;
+                locators: {
+                    kind: string;
+                    page?: number;
+                    page_label?: string;
+                    slide?: number;
+                    shape_id?: number;
+                    sheet?: string;
+                    cell_range?: string;
+                    start_line?: number;
+                    end_line?: number;
+                    role?: string;
+                }[];
+                /** @enum {string} */
+                coordinates: "upright_normalized";
+                /** @enum {string} */
+                highlight_precision: "region" | "whole_asset" | "unit_only";
+                /** @enum {boolean} */
+                resolved: true;
+            };
+            sources: {
+                citation_id: string;
+                title: string;
+                pack_id: string | null;
+                document_id: string | null;
+                unit_ids: string[];
+                locators: {
+                    kind: string;
+                    page?: number;
+                    page_label?: string;
+                    slide?: number;
+                    shape_id?: number;
+                    sheet?: string;
+                    cell_range?: string;
+                    start_line?: number;
+                    end_line?: number;
+                    role?: string;
+                }[];
+                provenance: string;
+            }[];
+        };
+        DiagramVisualSpec: {
+            /** @enum {integer} */
+            version: 1;
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "DiagramVisualSpec";
+            title: string;
+            description: string;
+            payload: {
+                nodes: {
+                    id: string;
+                    label: string;
+                    claim_ids: string[];
+                    support: {
+                        claim_ids: string[];
+                        cite_ids: string[];
+                        /** @enum {string} */
+                        status: "native_verified" | "interpreted" | "ocr_transcribed" | "user_annotated" | "native_unverified";
+                        provenance: ("native_text" | "ocr" | "vlm" | "user_annotation")[];
+                    };
+                }[];
+                edges: {
+                    from_id: string;
+                    to_id: string;
+                    /** @enum {string} */
+                    relation: "precedes" | "part_of" | "associated_with" | "activates" | "inhibits" | "causes" | "visible_arrow";
+                    label: string;
+                    claim_ids: string[];
+                    support: {
+                        claim_ids: string[];
+                        cite_ids: string[];
+                        /** @enum {string} */
+                        status: "native_verified" | "interpreted" | "ocr_transcribed" | "user_annotated" | "native_unverified";
+                        provenance: ("native_text" | "ocr" | "vlm" | "user_annotation")[];
+                    };
+                }[];
+            };
+            sources: {
+                citation_id: string;
+                title: string;
+                pack_id: string | null;
+                document_id: string | null;
+                unit_ids: string[];
+                locators: {
+                    kind: string;
+                    page?: number;
+                    page_label?: string;
+                    slide?: number;
+                    shape_id?: number;
+                    sheet?: string;
+                    cell_range?: string;
+                    start_line?: number;
+                    end_line?: number;
+                    role?: string;
+                }[];
+                provenance: string;
+            }[];
+        };
+        ComparisonVisualSpec: {
+            /** @enum {integer} */
+            version: 1;
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "ComparisonVisualSpec";
+            title: string;
+            description: string;
+            payload: {
+                columns: {
+                    id: string;
+                    text: string;
+                    claim_ids: string[];
+                    bindings: {
+                        cite_id: number;
+                        start: number;
+                        end: number;
+                    }[];
+                    support: {
+                        claim_ids: string[];
+                        cite_ids: string[];
+                        /** @enum {string} */
+                        status: "native_verified" | "interpreted" | "ocr_transcribed" | "user_annotated" | "native_unverified";
+                        provenance: ("native_text" | "ocr" | "vlm" | "user_annotation")[];
+                    };
+                }[];
+                rows: {
+                    id: string;
+                    criterion: {
+                        text: string;
+                        claim_ids: string[];
+                        bindings: {
+                            cite_id: number;
+                            start: number;
+                            end: number;
+                        }[];
+                        support: {
+                            claim_ids: string[];
+                            cite_ids: string[];
+                            /** @enum {string} */
+                            status: "native_verified" | "interpreted" | "ocr_transcribed" | "user_annotated" | "native_unverified";
+                            provenance: ("native_text" | "ocr" | "vlm" | "user_annotation")[];
+                        };
+                    };
+                    cells: ({
+                        column_id: string;
+                        text: string;
+                        /** @enum {string} */
+                        status: "stated";
+                        claim_ids: string[];
+                        bindings: {
+                            cite_id: number;
+                            start: number;
+                            end: number;
+                        }[];
+                        support?: {
+                            claim_ids: string[];
+                            cite_ids: string[];
+                            /** @enum {string} */
+                            status: "native_verified" | "interpreted" | "ocr_transcribed" | "user_annotated" | "native_unverified";
+                            provenance: ("native_text" | "ocr" | "vlm" | "user_annotation")[];
+                        };
+                    } | {
+                        column_id: string;
+                        /** @enum {string} */
+                        text: "";
+                        /** @enum {string} */
+                        status: "not_stated";
+                        claim_ids: string[];
+                        bindings: {
+                            cite_id: number;
+                            start: number;
+                            end: number;
+                        }[];
+                        support?: {
+                            claim_ids: string[];
+                            cite_ids: string[];
+                            /** @enum {string} */
+                            status: "native_verified" | "interpreted" | "ocr_transcribed" | "user_annotated" | "native_unverified";
+                            provenance: ("native_text" | "ocr" | "vlm" | "user_annotation")[];
+                        };
+                    })[];
+                }[];
+            };
+            sources: {
+                citation_id: string;
+                title: string;
+                pack_id: string | null;
+                document_id: string | null;
+                unit_ids: string[];
+                locators: {
+                    kind: string;
+                    page?: number;
+                    page_label?: string;
+                    slide?: number;
+                    shape_id?: number;
+                    sheet?: string;
+                    cell_range?: string;
+                    start_line?: number;
+                    end_line?: number;
+                    role?: string;
+                }[];
+                provenance: string;
+            }[];
+        };
+        ProcedureVisualSpec: {
+            /** @enum {integer} */
+            version: 1;
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "ProcedureVisualSpec";
+            title: string;
+            description: string;
+            payload: {
+                steps: {
+                    id: string;
+                    text: string;
+                    claim_ids: string[];
+                    support: {
+                        claim_ids: string[];
+                        cite_ids: string[];
+                        /** @enum {string} */
+                        status: "native_verified" | "interpreted" | "ocr_transcribed" | "user_annotated" | "native_unverified";
+                        provenance: ("native_text" | "ocr" | "vlm" | "user_annotation")[];
+                    };
+                }[];
+                precedes: {
+                    from_id: string;
+                    to_id: string;
+                    claim_ids: string[];
+                    support: {
+                        claim_ids: string[];
+                        cite_ids: string[];
+                        /** @enum {string} */
+                        status: "native_verified" | "interpreted" | "ocr_transcribed" | "user_annotated" | "native_unverified";
+                        provenance: ("native_text" | "ocr" | "vlm" | "user_annotation")[];
+                    };
+                }[];
+                /** @enum {string} */
+                ordering: "total" | "partial";
+            };
+            sources: {
+                citation_id: string;
+                title: string;
+                pack_id: string | null;
+                document_id: string | null;
+                unit_ids: string[];
+                locators: {
+                    kind: string;
+                    page?: number;
+                    page_label?: string;
+                    slide?: number;
+                    shape_id?: number;
+                    sheet?: string;
+                    cell_range?: string;
+                    start_line?: number;
+                    end_line?: number;
+                    role?: string;
+                }[];
+                provenance: string;
+            }[];
+        };
+        PlotVisualSpec: {
+            /** @enum {integer} */
+            version: 1;
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "PlotVisualSpec";
+            title: string;
+            description: string;
+            payload: {
+                /** @enum {string} */
+                chart_type: "bar" | "line" | "scatter";
+                x_label: string;
+                y_label: string;
+                unit: string;
+                x_unit?: string;
+                series: {
+                    id: string;
+                    label: string;
+                    unit: string;
+                    points: {
+                        group: string;
+                        value: string | null;
+                        x?: string;
+                        claim_ids: string[];
+                        bindings: {
+                            group: {
+                                cite_id: number;
+                                start: number;
+                                end: number;
+                            };
+                            value: {
+                                cite_id: number;
+                                start: number;
+                                end: number;
+                            };
+                            unit: {
+                                cite_id: number;
+                                start: number;
+                                end: number;
+                            };
+                            x?: {
+                                cite_id: number;
+                                start: number;
+                                end: number;
+                            };
+                            x_unit?: {
+                                cite_id: number;
+                                start: number;
+                                end: number;
+                            };
+                            scope?: {
+                                cite_id: number;
+                                start: number;
+                                end: number;
+                            };
+                            denominator?: {
+                                cite_id: number;
+                                start: number;
+                                end: number;
+                            };
+                        };
+                        support: {
+                            claim_ids: string[];
+                            cite_ids: string[];
+                            /** @enum {string} */
+                            status: "native_verified" | "interpreted" | "ocr_transcribed" | "user_annotated" | "native_unverified";
+                            provenance: ("native_text" | "ocr" | "vlm" | "user_annotation")[];
+                        };
+                    }[];
+                }[];
+            };
+            sources: {
+                citation_id: string;
+                title: string;
+                pack_id: string | null;
+                document_id: string | null;
+                unit_ids: string[];
+                locators: {
+                    kind: string;
+                    page?: number;
+                    page_label?: string;
+                    slide?: number;
+                    shape_id?: number;
+                    sheet?: string;
+                    cell_range?: string;
+                    start_line?: number;
+                    end_line?: number;
+                    role?: string;
+                }[];
+                provenance: string;
+            }[];
+        };
+        VisualSpec: components["schemas"]["SourceVisualSpec"] | components["schemas"]["DiagramVisualSpec"] | components["schemas"]["ComparisonVisualSpec"] | components["schemas"]["ProcedureVisualSpec"] | components["schemas"]["PlotVisualSpec"];
+        AnswerVisualResult: {
+            /** @enum {string} */
+            status: "ready" | "omitted" | "failed";
+            spec: Omit<components["schemas"]["VisualSpec"], "kind"> | null;
+            limitations: string[];
+            metadata: {
+                [key: string]: unknown;
+            };
         };
     };
     responses: never;

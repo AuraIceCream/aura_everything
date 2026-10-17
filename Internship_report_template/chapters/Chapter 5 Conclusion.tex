@@ -43,6 +43,23 @@ critique layers, and the evaluation harness all run against the full
 441-question benchmark, with the four-system ablation comparison reported
 in full in Section~\ref{4.11}.
 
+The browser interface runs against this pipeline directly. Every page reads
+from the local API, and the teaching-quality and failure-review panels
+aggregate the pipeline's own traces, so what they display is measured
+behaviour rather than illustrative data. A run's routed level and teaching
+style, the share of its claims carrying a verifiable citation, its verifier
+decision, and any revision it triggered are all recorded per question and
+reviewable afterwards.
+
+Per-stage timing of a live request also corrected an assumption worth
+recording. Answer generation is the conspicuous cost and was not the
+dominant one: verification accounted for 79\% of a request, because the
+natural-language-inference checker was being invoked once per
+claim-and-passage pair and never using its batch size. Restructuring that
+comparison into batched rounds made it roughly seven times faster while
+returning byte-identical labels. The component that looks expensive is not
+reliably the one that is, and only per-stage measurement distinguishes them.
+
 \section{Fine-Tuning: Plan and Current Progress}\label{5.3}
 
 Fine-tuning the local model is the next major phase of the project. Its

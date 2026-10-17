@@ -43,14 +43,18 @@ class ScriptedGenerator:
     answers: list[str]
     seen_instructions: list[tuple[str, ...]] = field(default_factory=list)
     seen_evidence: list[int] = field(default_factory=list)
+    seen_evidence_texts: list[tuple[str, ...]] = field(default_factory=list)
     seen_coverage: list[int] = field(default_factory=list)
     seen_unknown: list[tuple[str, ...]] = field(default_factory=list)
+    seen_previous: list[str] = field(default_factory=list)
 
-    def generate(self, route, evidence, instructions, coverage_pool=(), unknown_entities=()) -> str:
+    def generate(self, route, evidence, instructions, coverage_pool=(), unknown_entities=(), previous_answer="") -> str:
         self.seen_instructions.append(tuple(instructions))
         self.seen_evidence.append(len(evidence))
+        self.seen_evidence_texts.append(tuple(item.text for item in evidence))
         self.seen_coverage.append(len(coverage_pool))
         self.seen_unknown.append(tuple(unknown_entities))
+        self.seen_previous.append(previous_answer)
         index = min(len(self.seen_instructions) - 1, len(self.answers) - 1)
         return self.answers[index]
 
@@ -69,6 +73,26 @@ EVIDENCE = [
 
 
 class PipelineTests(unittest.TestCase):
+    def test_deep_evidence_can_reach_generator_without_compression(self) -> None:
+        text = (
+            "Somatic gene editing treats cells in one patient. "
+            "These edits are not inherited by offspring. "
+            "The first background detail describes how the cells are collected. "
+            "The second background detail describes how the cells are returned. "
+            "Germline editing alters embryos or reproductive cells. "
+            "Those edits may be inherited by future generations."
+        )
+        generator = ScriptedGenerator(["Somatic edits are not inherited. [1]"])
+        pipeline = AuraBioPipeline(
+            generator=generator,
+            searcher=FakeSearcher([FakeEvidence("gene-editing", text)]),
+            compress_deep_evidence=False,
+        )
+
+        pipeline.answer("Compare somatic and germline gene editing", context_level=3)
+
+        self.assertEqual(generator.seen_evidence_texts[0], (text,))
+
     def test_end_to_end_accept(self) -> None:
         generator = ScriptedGenerator([GOOD])
         pipeline = AuraBioPipeline(generator=generator, searcher=FakeSearcher(EVIDENCE))
@@ -81,7 +105,9 @@ class PipelineTests(unittest.TestCase):
 
     def test_bad_draft_triggers_one_revision(self) -> None:
         generator = ScriptedGenerator([BAD, GOOD])
-        pipeline = AuraBioPipeline(generator=generator, searcher=FakeSearcher(EVIDENCE))
+        pipeline = AuraBioPipeline(
+            generator=generator, searcher=FakeSearcher(EVIDENCE), revision_context=True
+        )
         answer = pipeline.answer("How does helicase work in DNA replication?")
         self.assertEqual(len(answer.trace.revisions), 2)
         self.assertEqual(answer.decision, "accept")
@@ -90,6 +116,15 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(
             any("mitochondira" in item for item in generator.seen_instructions[1])
         )
+        self.assertEqual(generator.seen_previous, ["", BAD])
+
+    def test_revision_context_is_opt_in(self) -> None:
+        generator = ScriptedGenerator([BAD, GOOD])
+        pipeline = AuraBioPipeline(generator=generator, searcher=FakeSearcher(EVIDENCE))
+
+        pipeline.answer("How does helicase work in DNA replication?")
+
+        self.assertEqual(generator.seen_previous, ["", ""])
 
     def test_revision_budget_is_respected(self) -> None:
         generator = ScriptedGenerator([BAD])
@@ -128,8 +163,11 @@ class PipelineTests(unittest.TestCase):
             generator=ScriptedGenerator([GOOD]), searcher=FakeSearcher(EVIDENCE), critic=Broken()
         )
         answer = pipeline.answer("How does helicase work in DNA replication?")
-        self.assertEqual(answer.decision, "accept")
-        self.assertIsNone(answer.trace.revisions[0]["critique"])
+        self.assertEqual(answer.decision, "degraded")
+        self.assertEqual(answer.text, GOOD)
+        self.assertEqual(len(answer.trace.revisions), 1)
+        self.assertFalse(answer.trace.revisions[0]["critique"]["trusted"])
+        self.assertEqual(answer.trace.revisions[0]["critique"]["failure_kind"], "RuntimeError")
 
     def test_critic_can_force_a_revision(self) -> None:
         class Strict:
@@ -178,13 +216,13 @@ class CritiqueParsingTests(unittest.TestCase):
     def test_unknown_decision_defaults_to_revise(self) -> None:
         self.assertEqual(parse_critique('{"decision": "looks fine"}').decision, "revise")
 
-    def test_untrusted_critic_cannot_block_a_clean_answer(self) -> None:
+    def test_untrusted_critic_does_not_falsely_approve_a_clean_answer(self) -> None:
         report = BiologyVerifier().verify(
             "Helicase unwinds DNA during replication. [1]",
             [EvidencePassage("c1", "Helicase unwinds DNA during replication.")],
         )
         self.assertEqual(report.decision(), "accept")
-        self.assertEqual(combine_decision(report, parse_critique("nonsense")), "accept")
+        self.assertEqual(combine_decision(report, parse_critique("nonsense")), "degraded")
 
     def test_critic_cannot_approve_over_a_verifier_error(self) -> None:
         report = BiologyVerifier().verify("Glycolysis occurs in the mitochondria of the cell.", [])

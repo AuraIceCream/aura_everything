@@ -49,6 +49,7 @@ class Trace:
     rerank: dict[str, Any] | None = None
     evidence: list[dict[str, Any]] = field(default_factory=list)
     revisions: list[dict[str, Any]] = field(default_factory=list)
+    selected_revision: int = -1
     final_answer: str = ""
     decision: str = ""
     confidence: float = 0.0
@@ -67,6 +68,23 @@ class Trace:
     def latency_ms(self) -> float:
         return round(sum(self.stage_ms.values()), 1)
 
+    @property
+    def final_record(self) -> dict[str, Any]:
+        if not self.revisions:
+            return {}
+        index = self.selected_revision if 0 <= self.selected_revision < len(self.revisions) else -1
+        return self.revisions[index]
+
+    @property
+    def final_verification(self) -> dict[str, Any]:
+        return self.final_record.get("verification", {})
+
+    @property
+    def revision_count(self) -> int:
+        if any("phase" in record for record in self.revisions):
+            return sum(record.get("phase") == "revision" for record in self.revisions)
+        return max(0, len(self.revisions) - 1)
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "schema_version": SCHEMA_VERSION,
@@ -77,6 +95,8 @@ class Trace:
             "rerank": self.rerank,
             "evidence": self.evidence,
             "revisions": self.revisions,
+            "selected_revision": self.selected_revision,
+            "final_verification": self.final_verification,
             "final_answer": self.final_answer,
             "decision": self.decision,
             "confidence": self.confidence,
@@ -111,7 +131,7 @@ class Trace:
                 "claims_without_a_source": self.provenance.get("unsupported_assertion_rate"),
                 "distinct_sources": self.provenance.get("distinct_sources"),
             },
-            "revised": len(self.revisions) > 1,
+            "revised": self.revision_count > 0,
             "learner_level": self.route.get("learner_level", {}).get("label"),
             "teaching_mode": self.route.get("teaching_mode", {}).get("label"),
         }
@@ -297,7 +317,7 @@ def classify_failure(trace: Trace) -> str | None:
 
     if not trace.revisions:
         return None
-    last = trace.revisions[-1]
+    last = trace.final_record
     verification = last.get("verification") or {}
     issues = verification.get("issues") or []
     kinds = {issue.get("kind") for issue in issues}

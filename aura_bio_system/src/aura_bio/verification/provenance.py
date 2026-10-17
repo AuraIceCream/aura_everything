@@ -23,9 +23,9 @@ that were in front of the model:
 * **unsupported assertion rate** — factual claims with no citation at all,
   which is the number a sceptical reader cares about.
 
-Validity is deliberately reported as a diagnostic and never used to gate an
-answer. It rests on token overlap, and this project has twice shipped a gate
-built on that measure and twice had to remove it.
+The overlap-based validity metric remains diagnostic, not an acceptance gate.
+Robust mode separately requires a minimum inline citation using the verifier's
+reported support labels; this does not establish correctness of every claim.
 """
 
 from __future__ import annotations
@@ -34,7 +34,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-from .checkers import EvidencePassage, content_tokens, split_claims
+from .checkers import EvidencePassage, check_claim_support, content_tokens, split_claims
+from .schema import Issue, Support, VerificationReport
 
 _CITATION = re.compile(r"\[(\d+)\]")
 
@@ -112,6 +113,40 @@ def _claim_spans(answer: str) -> list[tuple[str, str]]:
                 continue
             pairs.append((bare, sentence))
     return pairs
+
+
+def enforce_inline_support(answer: str, evidence: Sequence[EvidencePassage],
+                           report: VerificationReport) -> None:
+    """Require at least one inline citation linked to a supported claim.
+
+    Robust-mode floor, not a guarantee that every claim is correct. Reuses
+    verification's support labels and source IDs without fabricating a citation
+    or adding a second overlap threshold. Support still depends on the reported
+    backend: NLI in complete runs, lexical fallback otherwise.
+    Lexical source IDs include weak candidate matches, so the cited passage
+    must independently receive the checker's supported label.
+    """
+    if not evidence:
+        report.checker_status["inline_citations"] = "no_evidence"
+        return
+    supported = {claim.text.casefold(): set(claim.evidence_chunk_ids)
+                 for claim in report.claims if claim.support == Support.SUPPORTED}
+    for claim, span in _claim_spans(answer):
+        ids = supported.get(claim.casefold(), set())
+        for marker in map(int, _CITATION.findall(span)):
+            if 1 <= marker <= len(evidence) and evidence[marker - 1].chunk_id in ids:
+                if report.support_backend == "lexical":
+                    cited_support = check_claim_support([claim], [evidence[marker - 1]])
+                    if cited_support[0].support != Support.SUPPORTED:
+                        continue
+                report.checker_status["inline_citations"] = "supported"
+                return
+    report.checker_status["inline_citations"] = "missing_supported_citation"
+    report.issues.append(Issue(
+        "citation", "no_supported_inline_citation",
+        "Place an inline [n] citation beside a factual claim supported by that "
+        "numbered passage. A references list alone is insufficient. Do not invent "
+        "a source or attach an unrelated passage.", "error"))
 
 
 def measure_provenance(

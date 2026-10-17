@@ -62,7 +62,8 @@ def _build_searcher(index_root: Path) -> tuple[Any | None, bool, bool]:
         from ..device import resolve_device
 
         searcher = HybridSearcher(
-            index_root, device=resolve_device(), dense_enabled=dense_enabled
+            index_root, device=resolve_device(), dense_enabled=dense_enabled,
+            phrase_enabled=os.environ.get("AURA_ACCURACY_MODE", "standard") == "robust",
         )
         data = json.loads((index_root / "retrieval.manifest.json").read_text(encoding="utf-8"))
         return searcher, bool(data.get("dense_index")) and dense_enabled, bool(data.get("core_sparse"))
@@ -100,7 +101,7 @@ def _build_reranker() -> Any | None:
     try:
         from ..retrieval import CrossEncoderReranker
 
-        return CrossEncoderReranker()  # resolves to the GPU when one is usable
+        return CrossEncoderReranker(device=os.environ.get("AURA_RERANK_DEVICE", "cpu"))
     except Exception as exc:
         print(f"[aura-api] reranker unavailable: {exc}", flush=True)
         return None
@@ -141,7 +142,8 @@ def _build_generator() -> tuple[Any, str, str]:
         return gen, gen.model_name, "extractive"
     model = os.environ.get("AURA_OLLAMA_MODEL", "aura-bio:v0")
     host = os.environ.get("AURA_OLLAMA_HOST", "http://127.0.0.1:11434")
-    ollama = OllamaGenerator(model=model, host=host)
+    ollama = OllamaGenerator(model=model, host=host,
+                             prompt_profile=os.environ.get("AURA_PROMPT_PROFILE", "standard"))
     if ollama.available():
         return ollama, ollama.model_name, "ollama"
     print(f"[aura-api] Ollama model {model!r} not reachable; using extractive fallback", flush=True)
@@ -176,6 +178,8 @@ def get_runtime() -> Runtime:
             critic=critic,
             store=store,
             model_name=model_name,
+            accuracy_mode=os.environ.get("AURA_ACCURACY_MODE", "standard"),
+            draft_candidates=int(os.environ.get("AURA_DRAFT_CANDIDATES", "2")),
         )
         _RUNTIME = Runtime(
             pipeline=pipeline,

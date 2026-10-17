@@ -1,0 +1,288 @@
+{
+  "version": 1,
+  "frozen_before_prompt_tuning": true,
+  "bank_sha256": "939c515d3a6c70fbbfcc0356a554b2becbbb48fb51836e20fec9f0402971ed19",
+  "split_sha256": "0a9cfab1fb6149bda5994dff4152d1713689fa2343c10072a9e712346d894376",
+  "sources": [
+    {
+      "figure_id": "figure-01",
+      "path": "figure_fixtures/figure-01.png",
+      "sha256": "e17fe35f12cd9acdb1e15f55ab58761187e7581aed8c623818c5a59214a3f342",
+      "split": "dev",
+      "source_group": "figure-01",
+      "kind": "pathway",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node1A",
+        "Node1B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-02",
+      "path": "figure_fixtures/figure-02.png",
+      "sha256": "bd29e7d979a94893e7d41db3984258d9989cc6e961fe70786765ad6e21c06c1f",
+      "split": "dev",
+      "source_group": "figure-02",
+      "kind": "micrograph",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node2A",
+        "Node2B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-03",
+      "path": "figure_fixtures/figure-03.png",
+      "sha256": "fa93bec7d06897eecd20c952310dfc67c209aaccdb8b3490f090b5662f1950ff",
+      "split": "dev",
+      "source_group": "figure-03",
+      "kind": "gel",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node3A",
+        "Node3B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-04",
+      "path": "figure_fixtures/figure-04.png",
+      "sha256": "a8491fdf85c0b6322fe661d7d736d4caf083e8781850ddf424ff4694f73510ed",
+      "split": "dev",
+      "source_group": "figure-04",
+      "kind": "graph",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node4A",
+        "Node4B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-05",
+      "path": "figure_fixtures/figure-05.png",
+      "sha256": "0cbc66861e7c240717f486901e1101f75c3ecbffa61a5dd861b5c41e818510cf",
+      "split": "dev",
+      "source_group": "figure-05",
+      "kind": "structure",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node5A",
+        "Node5B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-06",
+      "path": "figure_fixtures/figure-06.png",
+      "sha256": "59203cbf4dd5b401c8e1fcc74d24cb2e82dd35bdb196d622aa23b94fad25e920",
+      "split": "holdout",
+      "source_group": "figure-06",
+      "kind": "table_image",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node6A",
+        "Node6B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-07",
+      "path": "figure_fixtures/figure-07.png",
+      "sha256": "ec52cb3d1d502f654a238409f9ebada95e24eaa6320ef949d322e0a7560ba174",
+      "split": "holdout",
+      "source_group": "figure-07",
+      "kind": "pathway",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node7A",
+        "Node7B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-08",
+      "path": "figure_fixtures/figure-08.png",
+      "sha256": "defff05145ab482597cadc5534253ebf9816ed3a33d20cf89b41a4de73558af4",
+      "split": "holdout",
+      "source_group": "figure-08",
+      "kind": "micrograph",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node8A",
+        "Node8B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-09",
+      "path": "figure_fixtures/figure-09.png",
+      "sha256": "50c2aebb4eff3f31986d9d37c160e791281025a971b97b683503bafab1e31a91",
+      "split": "dev",
+      "source_group": "figure-09",
+      "kind": "gel",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node9A",
+        "Node9B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-10",
+      "path": "figure_fixtures/figure-10.png",
+      "sha256": "9d32a87080ff0f1f2166592632f4b2238b065a08360951646b0382fe8bee5bce",
+      "split": "dev",
+      "source_group": "figure-10",
+      "kind": "graph",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node10A",
+        "Node10B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-11",
+      "path": "figure_fixtures/figure-11.png",
+      "sha256": "17dfbd5defd36cd0c5019a954e7ee09a11ea7deead08935e6c32929536f4651d",
+      "split": "dev",
+      "source_group": "figure-11",
+      "kind": "structure",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node11A",
+        "Node11B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-12",
+      "path": "figure_fixtures/figure-12.png",
+      "sha256": "9feebdd6f6060127a25d3c552826b8639393965c48be71ba5d4bfd4bcaf80c0c",
+      "split": "holdout",
+      "source_group": "figure-12",
+      "kind": "table_image",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node12A",
+        "Node12B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-13",
+      "path": "figure_fixtures/figure-13.png",
+      "sha256": "249c498664d1ded89835b15ed861fdbe6adbea6f611735ff38c917188cc0dcaf",
+      "split": "holdout",
+      "source_group": "figure-13",
+      "kind": "pathway",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node13A",
+        "Node13B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-14",
+      "path": "figure_fixtures/figure-14.png",
+      "sha256": "30e3127c53b422765069f2ea6dcfff6e5c71970328d0463a355060d390dcf714",
+      "split": "holdout",
+      "source_group": "figure-14",
+      "kind": "micrograph",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node14A",
+        "Node14B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-15",
+      "path": "figure_fixtures/figure-15.png",
+      "sha256": "d6d69ffa5b5da0ba61fe33152cec0d7532af4414d8c40380762864d33faab09c",
+      "split": "dev",
+      "source_group": "figure-15",
+      "kind": "gel",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node15A",
+        "Node15B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-16",
+      "path": "figure_fixtures/figure-16.png",
+      "sha256": "a2b5c3a901821a519d51d0770f6c3a493a8db72fbf76d16f4f0408800445dd8e",
+      "split": "dev",
+      "source_group": "figure-16",
+      "kind": "graph",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node16A",
+        "Node16B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-17",
+      "path": "figure_fixtures/figure-17.png",
+      "sha256": "516cb8af9fd56aca9b854f77866c3b0abb86cdd279ae4c0427d7ea19cdc8df46",
+      "split": "holdout",
+      "source_group": "figure-17",
+      "kind": "structure",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node17A",
+        "Node17B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-18",
+      "path": "figure_fixtures/figure-18.png",
+      "sha256": "8031ea4cadf7d00e60bd4394e5fdfa722776df1fd66f044f6300dfd25af37c89",
+      "split": "dev",
+      "source_group": "figure-18",
+      "kind": "table_image",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node18A",
+        "Node18B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-19",
+      "path": "figure_fixtures/figure-19.png",
+      "sha256": "83f64c5c115d44491ea8bb0d807e16d20f71cc99e3c168491c2df3c147cdee48",
+      "split": "dev",
+      "source_group": "figure-19",
+      "kind": "pathway",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node19A",
+        "Node19B"
+      ],
+      "not_real_experimental_data": true
+    },
+    {
+      "figure_id": "figure-20",
+      "path": "figure_fixtures/figure-20.png",
+      "sha256": "b63222132e1e0592e94b66d3e831d478cd31e39bd1e6f07ad7a4761ff16013c7",
+      "split": "holdout",
+      "source_group": "figure-20",
+      "kind": "micrograph",
+      "licence": "project-authored synthetic teaching fixture",
+      "visible_labels": [
+        "Node20A",
+        "Node20B"
+      ],
+      "not_real_experimental_data": true
+    }
+  ]
+}

@@ -16,6 +16,7 @@ from aura_bio_pipeline.retrieval import (
     chunks_by_id,
     load_embedding_jobs,
     open_sparse,
+    phrase_search,
     sparse_detail,
     sparse_search,
     write_retrieval_manifest,
@@ -524,6 +525,125 @@ class DenseJobTests(unittest.TestCase):
             self.assertEqual(results[0].channel, "core_bm25")
             self.assertIsNotNone(results[0].core_bm25_rank)
             self.assertIn("chloroplast", results[0].text.lower())
+
+    def test_phrase_channel_recovers_adjacent_biological_term(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            chunks = root / "chunks"
+            rows = [
+                _chunk(
+                    "genetics:test-cross", "wikipedia_biology",
+                    "A homozygous recessive partner reveals an unknown genotype.",
+                    title="Test cross",
+                ),
+                _chunk(
+                    "immunology:cross-reactivity", "wikipedia_biology",
+                    "A cross-reactivity test is useful in antibody screening.",
+                    title="Cross-reactivity testing",
+                ),
+            ]
+            shard = chunks / "wikipedia_biology" / "sample.jsonl.gz"
+            shard.parent.mkdir(parents=True)
+            with gzip.open(shard, "wt", encoding="utf-8") as handle:
+                for row in rows:
+                    handle.write(json.dumps(row) + "\n")
+            index_root = root / "indexes"
+            core = index_root / "core.sqlite3"
+            build_sparse_index(chunks, core, {"wikipedia_biology"})
+            write_retrieval_manifest(
+                index_root, dense_index=None, dense_map=None,
+                core_sparse=core, pubmed_sparse=None,
+            )
+
+            with HybridSearcher(index_root, dense_enabled=False, phrase_enabled=True) as searcher:
+                results = searcher.search(
+                    "What is a test cross and why is it useful?", top_k=2, candidate_k=2
+                )
+
+            self.assertEqual(results[0].chunk_id, "genetics:test-cross")
+            self.assertIn("phrase_bm25", results[0].channel)
+
+    def test_phrase_channel_ignores_body_only_generic_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shard = root / "chunks" / "wikipedia_biology" / "sample.jsonl.gz"
+            shard.parent.mkdir(parents=True)
+            rows = [
+                _chunk(
+                    "physiology:homeostasis", "wikipedia_biology",
+                    "Homeostasis maintains a stable internal environment through regulation.",
+                    title="Homeostasis",
+                ),
+                _chunk(
+                    "respiration:generic", "wikipedia_biology",
+                    "This process affects the human body in many ways.",
+                    title="Human body temperature",
+                ),
+            ]
+            with gzip.open(shard, "wt", encoding="utf-8") as handle:
+                for row in rows:
+                    handle.write(json.dumps(row) + "\n")
+            index_root = root / "indexes"
+            core = index_root / "core.sqlite3"
+            build_sparse_index(root / "chunks", core, {"wikipedia_biology"})
+            write_retrieval_manifest(
+                index_root, dense_index=None, dense_map=None,
+                core_sparse=core, pubmed_sparse=None,
+            )
+
+            with HybridSearcher(index_root, dense_enabled=False, phrase_enabled=True) as searcher:
+                results = searcher.search(
+                    "Define homeostasis and give one example in the human body.",
+                    top_k=2, candidate_k=2,
+                )
+
+            self.assertTrue(all("phrase_bm25" not in row.channel for row in results))
+
+    def test_phrase_channel_prefers_definition_over_repeated_examples(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shard = root / "chunks" / "wikipedia_biology" / "sample.jsonl.gz"
+            shard.parent.mkdir(parents=True)
+            rows = [
+                _chunk(
+                    "genetics:intro", "wikipedia_biology",
+                    "A test cross determines whether an individual is heterozygous "
+                    "by mating with a homozygous recessive partner.",
+                    title="Test cross",
+                ),
+                _chunk(
+                    "genetics:examples", "wikipedia_biology",
+                    "Test cross with C. elegans. Repeat the test cross and compare "
+                    "offspring from the test cross with another test cross.",
+                    title="Test cross",
+                ),
+                _chunk(
+                    "genetics:types", "wikipedia_biology",
+                    "Test cross types include monohybrid and dihybrid crosses.",
+                    title="Test cross",
+                ),
+            ]
+            rows[0]["section"] = "Introduction"
+            rows[1]["section"] = "C. elegans"
+            rows[2]["section"] = "Test cross types"
+            with gzip.open(shard, "wt", encoding="utf-8") as handle:
+                for row in rows:
+                    handle.write(json.dumps(row) + "\n")
+            index_root = root / "indexes"
+            core = index_root / "core.sqlite3"
+            build_sparse_index(root / "chunks", core, {"wikipedia_biology"})
+
+            connection = open_sparse(core)
+            try:
+                results = phrase_search(connection, "What is a test cross and why useful?")
+            finally:
+                connection.close()
+
+            selected_ids = [row["chunk_id"] for row in results]
+            self.assertEqual(selected_ids[0], "genetics:intro")
+            self.assertIn("genetics:intro", selected_ids)
+            self.assertIn("genetics:types", selected_ids)
+            self.assertNotIn("genetics:examples", selected_ids)
 
     def test_dense_can_be_disabled_for_low_memory_hosts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

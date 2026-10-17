@@ -66,6 +66,14 @@ SYSTEM_PROMPT = (
     "learner is at or below senior-secondary level."
 )
 
+COMPACT_SYSTEM_PROMPT = (
+    "You are AURA-Bio, a biology tutor. Answer each requested part briefly using "
+    "standard terms. Ignore off-topic excerpts; cite relevant support inline as "
+    "[n]. Never invent facts, numbers or citations. Correct false premises. "
+    "Apply explicit corrections, retain correct content, and return one clean "
+    "answer, not the old draft plus an addendum. Do not repeat or discuss retrieval."
+)
+
 #: How each learner level should shape vocabulary and depth.
 LEVEL_GUIDANCE: dict[LearnerLevel, str] = {
     LearnerLevel.ELEMENTARY: "Use everyday words and one concrete everyday example. Avoid jargon.",
@@ -171,7 +179,12 @@ COMPLETENESS = (
 REVISION_HEADER = (
     "Revise the previous answer to fix these specific problems. Keep everything "
     "that was correct — correct and add, never delete content that answers the "
-    "question:"
+    "question. Return one clean answer, not the draft plus an addendum, and do "
+    "not repeat paragraphs:"
+)
+FRESH_REVISION_HEADER = (
+    "Write a fresh answer to the question, addressing these specific problems "
+    "found in the previous attempt. Do not repeat paragraphs:"
 )
 
 
@@ -301,6 +314,8 @@ def build_prompt(
     instructions: Sequence[str] = (),
     coverage_pool: Sequence[Any] = (),
     unknown_entities: Sequence[str] = (),
+    previous_answer: str = "",
+    profile: str = "standard",
 ) -> Prompt:
     """Assemble the system and user prompts for one generation call.
 
@@ -312,6 +327,11 @@ def build_prompt(
     never reached the model. Drawing the checklist from the full pool recovers
     it without putting unvetted passages in front of the learner.
     """
+
+    if profile == "compact":
+        return _compact_prompt(route, evidence, instructions, unknown_entities, previous_answer)
+    if profile != "standard":
+        raise ValueError(f"Unknown prompt profile: {profile}")
 
     level = LearnerLevel(route.learner_level.label)
     mode = TeachingMode(route.teaching_mode.label)
@@ -356,7 +376,70 @@ def build_prompt(
 
     if instructions:
         parts.append("")
-        parts.append(REVISION_HEADER)
+        if previous_answer:
+            parts.append("Previous answer to revise:")
+            parts.append(previous_answer)
+            parts.append("")
+        parts.append(REVISION_HEADER if previous_answer else FRESH_REVISION_HEADER)
         parts.extend(f"- {item}" for item in instructions)
 
     return Prompt(system=SYSTEM_PROMPT, user="\n".join(parts))
+
+
+def _compact_prompt(
+    route: Route,
+    evidence: Sequence[Any],
+    instructions: Sequence[str],
+    unknown_entities: Sequence[str],
+    previous_answer: str,
+) -> Prompt:
+    """Bound context for small local models while retaining source attribution."""
+
+    parts = [
+        f"Question: {route.query}",
+        f"Audience: {route.learner_level.label}.",
+    ]
+    if route.teaching_mode.label in ("socratic", "teach_back"):
+        parts.extend(MODE_STRUCTURE[TeachingMode(route.teaching_mode.label)])
+    else:
+        parts.append(
+            "Use short bullets, with one or two sentences each. For comparisons, "
+            "use one bullet per item covering the requested attributes. Put process "
+            "steps in order; cover every requested part before adding examples."
+        )
+    parts.append(
+        "Use inline [n] beside claims actually supported by the numbered sources. "
+        "Do not append source excerpts, source metadata, the old draft or feedback. "
+        "Avoid introductions, repeated summaries and unrequested numerical examples."
+    )
+    if instructions:
+        parts.append("Corrections / constraints:\n" + "\n".join(f"- {x}" for x in instructions))
+    if previous_answer:
+        parts.append("Previous draft to correct, not repeat:\n" + previous_answer)
+    if unknown_entities:
+        parts.append(
+            "Possibly unrecognized names: " + ", ".join(unknown_entities)
+            + ". Check them before accepting the premise."
+        )
+    if route.needs_retrieval:
+        parts.append("Relevant source excerpts (use only where applicable):")
+        # Selection owns the budget: preserve the verifier's passages and
+        # citation numbering. The external critic has its own excerpt budget.
+        parts.append(format_evidence(evidence))
+    return Prompt(system=COMPACT_SYSTEM_PROMPT, user="\n\n".join(parts))
+
+
+def focus_revision_instructions(instructions: Sequence[str], limit: int = 4) -> tuple[str, ...]:
+    """Prioritise concrete defects over broad feedback; keep edits intact."""
+    def priority(text: str) -> int:
+        if text.startswith("Fix the"):
+            return 0
+        if text.startswith(("Correct this process error", "Correct this terminology error")):
+            return 1
+        if text.startswith("Correct this claim"):
+            return 2
+        if text.startswith("Cover the missing concept"):
+            return 3
+        return 4
+
+    return tuple(sorted(dict.fromkeys(instructions), key=priority)[:limit])

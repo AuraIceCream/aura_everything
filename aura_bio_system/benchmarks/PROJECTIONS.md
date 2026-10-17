@@ -1,5 +1,10 @@
 # Expected benchmark movement: baseline → full RAG → finetuned + RAG
 
+> Historical pre-run projections. Later measurements corrected the adversarial
+> scorer and did not establish the predicted full-RAG accuracy gain. Consult
+> [FINDINGS.md](FINDINGS.md) for observed results. Fine-tuning has not been
+> completed.
+
 Grounded in the measured baseline run (441 questions, `aura-bio:v0`, no
 pipeline). These are forecasts with stated reasoning, not results.
 

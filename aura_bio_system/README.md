@@ -20,6 +20,12 @@ query
 
 ## Installation
 
+Local study packs now also accept PNG/JPEG and retain PDF page/figure previews.
+OCR/vision passes are explicitly started, checkpointed and provenance-labelled;
+model descriptions never verify themselves. See the [study-pack guide](../docs/study-packs.md)
+for optional `[api,study,visual]` dependencies, local resource checks and hosted
+permission. The original biology corpus is separate and unchanged.
+
 From `G:\aura_llm`:
 
 ```powershell
@@ -31,10 +37,31 @@ python -m pip install -e ".\aura_bio_system[api]"   # adds FastAPI + uvicorn
 ## API server
 
 `aura_bio.api` is a FastAPI backend serving the `frontend/` React app against
-this runtime. It implements the app's `/api/v1` contract — health,
-capabilities, corpus status, runs (with an SSE event stream), retrieval search,
-and an evaluation summary — and degrades gracefully: no model means extractive
-answers, no dense index means the instant BM25 channels.
+this runtime. It degrades gracefully: no model means extractive answers, no
+dense index means the instant BM25 channels.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/v1/health` | index and model readiness |
+| `GET /api/v1/capabilities` | models, teaching modes, retrieval modes |
+| `GET /api/v1/corpus/status` | corpus and preparation coverage |
+| `POST /api/v1/runs` | answer one question through the full pipeline |
+| `GET /api/v1/runs` | recent runs with their trace summaries |
+| `GET /api/v1/runs/{id}` | one run with its full trace |
+| `GET /api/v1/runs/{id}/events` | SSE replay of the run |
+| `POST /api/v1/retrieval/search` | retrieval only, no generation |
+| `GET /api/v1/evaluation/summary` | benchmark composition |
+
+`GET /api/v1/runs` is what the interface's recent-runs, teaching-quality and
+failure-review panels read, so those panels show measured behaviour rather
+than sample data. Runs are held in memory and reset when the server restarts.
+
+An exception inside a request is converted to a normal HTTP error before it
+leaves the handler. This matters more than it sounds: an unhandled exception
+is returned by Starlette's outermost error middleware, which sits *outside*
+the CORS middleware, so the browser sees a bare 500 with no
+`Access-Control-Allow-Origin` header and reports it as a CORS failure. Running
+out of memory returns 503 naming the component to switch off.
 
 ```powershell
 aura-bio-api --index-root D:\aura_data\AURA-Bio-Index

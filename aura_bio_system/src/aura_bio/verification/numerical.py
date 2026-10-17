@@ -93,6 +93,31 @@ def _match_stated(expected: float, answer: str) -> tuple[float | None, str]:
 # ---------------------------------------------------------------------------
 
 
+def _named_frequency_values(quantity: str, answer: str) -> list[float]:
+    """Literal named claims only, not expression prefixes or rejected examples."""
+    labels = {
+        "q": r"(?:\bq\b|\(\s*q\s*\))",
+        "p": r"(?:\bp\b|\(\s*p\s*\))",
+        "q_squared": r"(?:\bq\s*(?:\^\s*2|²)|\bq_squared\b)",
+        "p_squared": r"(?:\bp\s*(?:\^\s*2|²)|\bp_squared\b)",
+        "2pq": (r"(?:\b2\s*p\s*q\b|\b(?:frequency|proportion|percentage)\s+of\s+"
+                r"(?:the\s+)?(?:heterozygotes|carriers)\b[^.!?\n]{0,80}?)"),
+    }
+    pattern = (labels[quantity] + r"\s*(?:=|is|equals)\s*"
+               r"(?P<value>-?\d+(?:\.\d+)?)(?!\w|\.\d)\s*(?P<percent>%?)"
+               r"(?!\s*[+*/^\-])")
+    values = []
+    for match in re.finditer(pattern, answer, re.I):
+        # 'p + q = 1' is a sum, not a claim that q alone equals one.
+        prefix = re.split(r"(?<=[.!?])\s+|[\r\n;]", answer[:match.start()])[-1]
+        if (re.search(r"[+*/^\-]\s*$", prefix)
+                or re.search(r"\b(?:not|incorrect(?:ly)?|wrong(?:ly)?|mistake|avoid)\b", prefix, re.I)):
+            continue
+        value = float(match.group("value"))
+        values.append(value / 100 if match.group("percent") else value)
+    return values
+
+
 def hardy_weinberg(question: str, answer: str) -> list[NumericCheck]:
     """Recover p and q from a stated homozygous-recessive frequency.
 
@@ -167,6 +192,13 @@ def hardy_weinberg(question: str, answer: str) -> list[NumericCheck]:
     ):
         expected = float(value)
         stated, verdict = _match_stated(expected, answer) if quantity == graded else (None, "working")
+        # A correct number elsewhere must not erase an explicitly wrong claim
+        # about this quantity. Inspect all named literal occurrences, including
+        # intermediate p/q values, while preserving the original target grade.
+        for claimed in _named_frequency_values(quantity, answer):
+            if abs(claimed - expected) > TOLERANCE * max(abs(expected), 1e-12):
+                stated, verdict = claimed, "incorrect"
+                break
         checks.append(
             NumericCheck("hardy_weinberg", quantity, expected, stated, verdict, working, inputs)
         )

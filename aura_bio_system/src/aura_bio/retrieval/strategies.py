@@ -20,6 +20,7 @@ evidence.
 from __future__ import annotations
 
 import re
+from copy import copy
 from dataclasses import dataclass
 from typing import Any, Protocol, Sequence
 
@@ -78,6 +79,77 @@ def decompose_query(query: str, max_parts: int = 3) -> list[str]:
     return unique[:max_parts]
 
 
+def question_parts(query: str, max_parts: int = 6) -> list[str]:
+    """Split explicit requests, never commas inside a subject enumeration."""
+    start = r'(?:what|which|how|when|where|why|does|do|did|is|are|can|could|whether)\b'
+    parts = re.split(r'(?:[?;]\s*|,\s*(?:and\s+)?|\s+and\s+)(?=' + start + ')', query, flags=re.I)
+    if len(parts) == 1:
+        return [query.strip()]
+    # A document/title prefix applies to the original query, not every facet.
+    if re.match(r'^\s*(?:in|from|according to)\b', parts[0], re.I):
+        match = re.search(r'\b' + start, parts[0], re.I)
+        if match:
+            parts[0] = parts[0][match.start():]
+        elif not re.search(r'\b(?:compare|contrast|explain|describe|list|state)\b', parts[0], re.I):
+            parts = parts[1:]
+    return [part.strip(' ,;?.') for part in parts if part.strip(' ,;?.')][:max_parts]
+
+
+def query_variants(query: str, max_parts: int = 4) -> list[str]:
+    """Bounded expansion of explicit subjects, with no invented answers.
+
+    Preserve the original question and shared attributes for list/comparison
+    subjects. Simple single-topic questions retain their original query.
+    """
+    requests = question_parts(query)
+    if len(requests) > 1 or requests != [query.strip()]:
+        return list(dict.fromkeys([query, *requests]))[:max_parts]
+    cleaned = _LEAD_IN.sub("", query).strip(" ?.")
+    comparison = bool(_COMPARISON.search(query))
+    cleaned = _COMPARISON.sub("", cleaned).strip()
+    shared = ""
+    # In "compare X with Y", the first subject's attribute is not shared by Y.
+    explicit_with = comparison and bool(re.search(r"\s+(?:with|to)\s+", cleaned, re.I))
+    attribute = None if explicit_with else re.match(r"^(?:the\s+)?(.{3,45}?)\s+of\s+(.+)$", cleaned, re.I)
+    if attribute:
+        shared, cleaned = attribute.groups()
+    separator = r",\s*(?:and\s+)?|\s+(?:and|versus|vs\.?|or" + (r"|with|to" if comparison else "") + r")\s+"
+    subjects = re.split(separator, cleaned, flags=re.I)
+    parts = [query]
+    if len(subjects) > 1:
+        for subject in subjects:
+            subject = re.sub(r"^(?:a|an|the)\s+", "", subject.strip(" ,?."), flags=re.I)
+            if 3 <= len(subject) <= (240 if comparison else 100) and len(subject.split()) <= (30 if comparison else 10):
+                part = f"{shared} of {subject}" if shared else subject
+                if part.casefold() != query.casefold():
+                    parts.append(part)
+    return list(dict.fromkeys(parts))[:max_parts]
+
+
+def evidence_identity(hit):
+    return (getattr(hit, 'pack_id', ''), getattr(hit, 'chunk_id', None))
+
+
+def multi_query_search(searcher: SearcherLike, query: str, top_k: int, candidate_k: int) -> list[Any]:
+    """Fuse explicit query variants by weighted reciprocal rank.
+
+    Work on copies so scoring a second query cannot overwrite another query's
+    results, including when a searcher caches Evidence objects.
+    """
+    pooled: dict[str, Any] = {}
+    for number, part in enumerate(query_variants(query)):
+        weight = 1.0 if number == 0 else 0.55
+        for rank, hit in enumerate(searcher.search(part, top_k=top_k, candidate_k=candidate_k), 1):
+            key = evidence_identity(hit)
+            if key[1] is None:
+                continue
+            if key not in pooled:
+                pooled[key] = copy(hit)
+                pooled[key].rrf_score = 0.0
+            pooled[key].rrf_score += weight / (60 + rank)
+    return sorted(pooled.values(), key=lambda hit: hit.rrf_score, reverse=True)[:min(top_k * 2, 100)]
+
+
 def hierarchical_search(
     searcher: SearcherLike,
     core_connection: Any,
@@ -86,6 +158,7 @@ def hierarchical_search(
     candidate_k: int = 60,
     documents: int = 4,
     per_document: int = 4,
+    neighbor_fetch: Any = None,
 ) -> list[Any]:
     """Level 3: find the best documents, then read around the hits inside them.
 
@@ -111,7 +184,13 @@ def hierarchical_search(
     ][:documents]
 
     expanded: list[Any] = list(hits[:top_k])
-    known = {getattr(h, "chunk_id", None) for h in expanded}
+    known = {evidence_identity(h) for h in expanded}
+    if neighbor_fetch is not None:
+        for item in neighbor_fetch(expanded, 1, 16):
+            if evidence_identity(item) not in known:
+                expanded.append(item)
+                known.add(evidence_identity(item))
+        return expanded
     if core_connection is not None and top_documents:
         try:
             from aura_bio_pipeline.retrieval import Evidence, chunks_in_documents
@@ -121,9 +200,9 @@ def hierarchical_search(
             siblings = {}
         for document_id, rows in siblings.items():
             for row in rows:
-                if row["chunk_id"] in known:
+                if ('', row["chunk_id"]) in known:
                     continue
-                known.add(row["chunk_id"])
+                known.add(('', row["chunk_id"]))
                 expanded.append(
                     Evidence(
                         chunk_id=row["chunk_id"],
@@ -147,28 +226,32 @@ def deep_search(
     query: str,
     top_k: int,
     candidate_k: int = 80,
+    neighbor_fetch: Any = None,
 ) -> list[Any]:
     """Level 4: decompose the query, retrieve each part, then expand documents."""
 
     pooled: dict[str, Any] = {}
     for part in decompose_query(query):
         for rank, hit in enumerate(searcher.search(part, top_k=top_k, candidate_k=candidate_k), 1):
-            chunk_id = getattr(hit, "chunk_id", None)
-            if chunk_id is None:
+            chunk_id = evidence_identity(hit)
+            if chunk_id[1] is None:
                 continue
             existing = pooled.get(chunk_id)
             # A passage found by several sub-queries is more central, so its
             # fused contribution accumulates.
             if existing is None:
-                hit.rrf_score = getattr(hit, "rrf_score", 0.0) + 1 / (60 + rank)
-                pooled[chunk_id] = hit
+                # Searchers may return cached objects. Fusing on a copy keeps
+                # repeat requests and subsequent variants independent.
+                fused = copy(hit)
+                fused.rrf_score = getattr(hit, "rrf_score", 0.0) + 1 / (60 + rank)
+                pooled[chunk_id] = fused
             else:
                 existing.rrf_score += 1 / (60 + rank)
     ranked = sorted(pooled.values(), key=lambda item: getattr(item, "rrf_score", 0.0), reverse=True)
     if not ranked:
         return []
     return hierarchical_search(
-        _FixedSearcher(ranked), core_connection, query, top_k, candidate_k, documents=5, per_document=3
+        _FixedSearcher(ranked), core_connection, query, top_k, candidate_k, documents=5, per_document=3, neighbor_fetch=neighbor_fetch
     )
 
 
@@ -220,8 +303,9 @@ def compress_evidence(
             compressed.append(item)
             continue
         ordered = [sentence for _, _, sentence in sorted(keep, key=lambda e: e[0])]
-        item.text = " ".join(ordered)
-        compressed.append(item)
+        trimmed = copy(item)
+        trimmed.text = " ".join(ordered)
+        compressed.append(trimmed)
     return compressed
 
 
@@ -232,12 +316,20 @@ def retrieve_for_level(
     context_level: int,
     retrieve_k: int,
     candidate_k: int | None = None,
+    expand_queries: bool = False,
+    neighbor_fetch: Any = None,
 ) -> list[Any]:
     """Dispatch to the retrieval strategy the routed context level calls for."""
 
     candidate_k = candidate_k or max(retrieve_k * 2, 50)
+    if expand_queries:
+        ranked = multi_query_search(searcher, query, retrieve_k, candidate_k)
+        if context_level >= 3:
+            return hierarchical_search(_FixedSearcher(ranked), core_connection, query,
+                                       len(ranked), candidate_k, neighbor_fetch=neighbor_fetch)
+        return ranked
     if context_level >= 4:
-        return deep_search(searcher, core_connection, query, retrieve_k, candidate_k)
+        return deep_search(searcher, core_connection, query, retrieve_k, candidate_k, neighbor_fetch=neighbor_fetch)
     if context_level == 3:
-        return hierarchical_search(searcher, core_connection, query, retrieve_k, candidate_k)
+        return hierarchical_search(searcher, core_connection, query, retrieve_k, candidate_k, neighbor_fetch=neighbor_fetch)
     return searcher.search(query, top_k=retrieve_k, candidate_k=candidate_k)

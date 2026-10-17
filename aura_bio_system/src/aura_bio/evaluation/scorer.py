@@ -180,8 +180,8 @@ def score_answer(question: BenchmarkQuestion, answer: str) -> QuestionScore:
         checks = verify_numerical(question.question, answer)
         if checks:
             detail["numeric"] = [c.as_dict() for c in checks]
-            if not numeric_correct and any(c.verdict == "correct" for c in checks):
-                numeric_correct = True
+            # Never promote a different solver sub-quantity into the declared
+            # answer, or let correct working override an incorrect conclusion.
 
     order_correct: bool | None = None
     if key.ordered_steps:
@@ -236,6 +236,12 @@ def _numbers_in(text: str) -> list[float]:
 
 
 def _numeric_match(answer: str, expected: float, tolerance: float) -> bool:
+    conclusions = list(re.finditer(
+        r"\b(?:therefore|thus|hence|in conclusion|final (?:answer|result))\b", answer, re.I))
+    if conclusions:
+        # Prefer the last explicitly marked conclusion to incidental numbers
+        # in the working. Limit it to its paragraph; this remains rule-based.
+        answer = answer[conclusions[-1].end():].split("\n\n", 1)[0]
     numbers = _numbers_in(answer)
     if not numbers:
         return False

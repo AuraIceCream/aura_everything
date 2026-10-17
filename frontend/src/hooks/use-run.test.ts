@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { demoAnswer, traceEvents } from "../lib/mock-data";
+import { demoAnswer, traceEvents } from "../test/fixtures";
 import { initialRunState, runReducer } from "./use-run";
 
 describe("runReducer", () => {
+  it('clears private content when a source is invalidated', () => {
+    const state = runReducer({...initialRunState, markdown:'private', answer:demoAnswer}, {type:'run.invalidated', code:'attachment_expired', message:'Expired'});
+    expect(state.markdown).toBe(''); expect(state.answer).toBeUndefined(); expect(state.status).toBe('failed');
+  });
   it("preserves streamed text and trace events until completion", () => {
     let state = runReducer(initialRunState, { type: "start" });
     state = runReducer(state, { type: "created", runId: "run-1" });
@@ -22,4 +26,3 @@ describe("runReducer", () => {
     expect(state.error).toMatch(/disconnected/);
   });
 });
-

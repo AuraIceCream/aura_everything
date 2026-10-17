@@ -80,6 +80,8 @@ class VerificationReport:
     citation_coverage: float = 0.0
     grounded_fraction: float = 0.0
     numerical: list[dict[str, Any]] = field(default_factory=list)
+    support_backend: str = "disabled"
+    checker_status: dict[str, str] = field(default_factory=dict)
 
     @property
     def blocking(self) -> list[Issue]:
@@ -147,6 +149,8 @@ class VerificationReport:
             "citation_coverage": round(self.citation_coverage, 3),
             "grounded_fraction": round(self.grounded_fraction, 3),
             "numerical": self.numerical,
+            "support_backend": self.support_backend,
+            "checker_status": dict(self.checker_status),
             "unsupported_claim_count": len(self.unsupported_claims),
             "decision": self.decision(),
             "confidence": self.confidence(),

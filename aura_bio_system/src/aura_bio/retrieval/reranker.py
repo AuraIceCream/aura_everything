@@ -12,6 +12,7 @@ with and without it, so the pipeline must run either way.
 from __future__ import annotations
 
 import os
+import math
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol, Sequence
@@ -134,7 +135,7 @@ def select_evidence(
     evidence: Sequence[Any],
     max_passages: int,
     max_chars: int = 14000,
-    per_source_cap: int = 4,
+    per_source_cap: int | None = 4,
 ) -> list[Any]:
     """Trim reranked passages to what the local model can actually read.
 
@@ -156,7 +157,7 @@ def select_evidence(
         if len(chosen) >= max_passages:
             break
         source = getattr(item, "source_id", "") or ""
-        if per_source.get(source, 0) >= per_source_cap:
+        if per_source_cap is not None and per_source.get(source, 0) >= per_source_cap:
             continue
         text = getattr(item, "text", "") or ""
         if chosen and used + len(text) > max_chars:
@@ -165,3 +166,88 @@ def select_evidence(
         per_source[source] = per_source.get(source, 0) + 1
         used += len(text)
     return chosen
+
+
+def select_diverse_evidence(
+    query: str,
+    evidence: Sequence[Any],
+    max_passages: int,
+    max_chars: int = 9000,
+    per_source_cap: int | None = 4,
+    per_document_cap: int | None = 2,
+    min_relevance_ratio: float = 0.2,
+) -> list[Any]:
+    """Greedy MMR with query coverage and a hard prompt budget.
+
+    Relevance comes from the input ranking, diversity from passage-token
+    overlap, and coverage from the user's question alone. No answer keys or
+    generated facts enter selection. Full reranked candidates are eligible;
+    redundant chunks cannot crowd out a complementary comparison subject.
+    """
+    from ..verification.checkers import content_tokens
+
+    if max_passages <= 0 or max_chars <= 0:
+        return []
+    asked = content_tokens(query)
+    raw_scores = [getattr(item, "rerank_score", None) for item in evidence]
+    available = [float(score) for score in raw_scores if score is not None]
+    logits = any(score < 0 or score > 1 for score in available)
+    relevance_scores = [None if score is None else (
+        1.0 / (1.0 + math.exp(-max(-50.0, min(50.0, float(score))))) if logits else float(score)
+    ) for score in raw_scores]
+    best_score = max((score for score in relevance_scores if score is not None), default=0.0)
+    floor = max(0.1, best_score * min_relevance_ratio)
+    pool = []
+    for rank, item in enumerate(evidence):
+        text = getattr(item, "text", "") or ""
+        if not text.strip() or len(text) > max_chars:
+            continue
+        if relevance_scores[rank] is not None and relevance_scores[rank] < floor:
+            continue
+        tokens = content_tokens(text)
+        title_tokens = content_tokens(getattr(item, "title", "") or "")
+        pool.append((rank, item, tokens, (tokens | title_tokens) & asked))
+
+    selected: list[Any] = []
+    selected_tokens: list[set[str]] = []
+    covered: set[str] = set()
+    sources: dict[str, int] = {}
+    documents: dict[str, int] = {}
+    used = 0
+    while pool and len(selected) < max_passages:
+        eligible = []
+        for rank, item, tokens, matches in pool:
+            source = getattr(item, "source_id", "") or ""
+            document = getattr(item, "document_id", "") or (
+                source + ":" + (getattr(item, "title", "") or str(getattr(item, "chunk_id", rank)))
+            )
+            if used + len(item.text) > max_chars or (per_source_cap is not None and sources.get(source, 0) >= per_source_cap):
+                continue
+            # The document cap must not exclude a third explicitly requested
+            # subject simply because one textbook chapter covers all three.
+            if per_document_cap is not None and documents.get(document, 0) >= per_document_cap and not (matches - covered):
+                continue
+            similarity = max((len(tokens & old) / max(1, len(tokens | old))
+                              for old in selected_tokens), default=0.0)
+            if similarity >= 0.85:
+                continue
+            novelty = len(matches - covered) / max(1, len(asked))
+            rank_relevance = 1.0 / (1.0 + 0.08 * rank)
+            relevance = rank_relevance if relevance_scores[rank] is None else (
+                0.7 * relevance_scores[rank] + 0.3 * rank_relevance
+            )
+            score = relevance + 0.65 * novelty - 0.55 * similarity - 0.12 * documents.get(document, 0)
+            # Preserve the best feasible ranked passage as the first anchor.
+            key = (-rank,) if not selected else (score, -rank)
+            eligible.append((key, rank, item, tokens, matches, source, document))
+        if not eligible:
+            break
+        _, rank, item, tokens, matches, source, document = max(eligible, key=lambda row: row[0])
+        selected.append(item)
+        selected_tokens.append(tokens)
+        covered.update(matches)
+        sources[source] = sources.get(source, 0) + 1
+        documents[document] = documents.get(document, 0) + 1
+        used += len(item.text)
+        pool = [row for row in pool if row[0] != rank]
+    return selected

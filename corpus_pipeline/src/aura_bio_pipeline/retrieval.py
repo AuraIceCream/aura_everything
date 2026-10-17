@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -55,6 +56,7 @@ QA_SOURCES = frozenset({"pubmedqa_labeled"})
 RRF_K = 60
 DENSE_WEIGHT = 1.0
 CORE_SPARSE_WEIGHT = 0.65
+PHRASE_WEIGHT = 2.0
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -359,6 +361,66 @@ def sparse_search(
     finally:
         if owned:
             connection.close()
+
+
+def phrase_search(
+    connection: sqlite3.Connection, query: str, candidate_k: int = 8
+) -> list[dict[str, Any]]:
+    """Find adjacent query terms that identify a core source title."""
+
+    terms = re_terms(query)
+    phrases: list[str] = []
+    for left, right in zip(terms, terms[1:]):
+        if (
+            len(left) > 2 and len(right) > 2
+            and left.lower() not in _QUERY_NOISE
+            and right.lower() not in _QUERY_NOISE
+        ):
+            phrase = f"{left.lower()} {right.lower()}"
+            if phrase not in phrases:
+                phrases.append(phrase)
+    if not phrases:
+        return []
+    selected = phrases[:3]
+    match = " OR ".join(f'title:"{phrase}"' for phrase in selected)
+    rows = connection.execute(_SEARCH_SQL, (match, max(candidate_k * 4, 32))).fetchall()
+    exact_rows = [
+        dict(row) for row in rows
+        if " ".join(re_terms((row["title"] or "").split(" (", 1)[0])).lower() in selected
+    ]
+
+    asks_definition = bool(
+        re.match(r"\s*(?:what\s+(?:is|are)|define|definition|meaning)\b", query, re.I)
+    )
+
+    def section_priority(row: dict[str, Any]) -> tuple[int, int, float]:
+        section = row.get("section") or ""
+        section_terms = set(query_terms(section))
+        query_overlap = len(section_terms & set(query_terms(query)))
+        overview = section.strip().casefold() in {
+            "introduction", "overview", "definition", "summary", "abstract"
+        }
+        return (
+            0 if asks_definition and overview else 1,
+            -query_overlap,
+            float(row["bm25_score"]),
+        )
+
+    exact_rows.sort(key=section_priority)
+    per_title: dict[tuple[str, str], int] = {}
+    results: list[dict[str, Any]] = []
+    for row in exact_rows:
+        key = (
+            row.get("source_id", ""),
+            " ".join(re_terms((row.get("title") or "").split(" (", 1)[0])).lower(),
+        )
+        if per_title.get(key, 0) >= 2:
+            continue
+        per_title[key] = per_title.get(key, 0) + 1
+        results.append(row)
+        if len(results) >= candidate_k:
+            break
+    return results
 
 
 def chunks_in_documents(
@@ -840,6 +902,7 @@ class Evidence:
     dense_rank: int | None = None
     core_bm25_rank: int | None = None
     pubmed_bm25_rank: int | None = None
+    phrase_bm25_rank: int | None = None
     rerank_score: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -857,6 +920,7 @@ class Evidence:
             "dense_rank": self.dense_rank,
             "core_bm25_rank": self.core_bm25_rank,
             "pubmed_bm25_rank": self.pubmed_bm25_rank,
+            "phrase_bm25_rank": self.phrase_bm25_rank,
             "rerank_score": None if self.rerank_score is None else round(self.rerank_score, 4),
         }
 
@@ -876,6 +940,7 @@ class HybridSearcher:
         model_name: str = "BAAI/bge-base-en-v1.5",
         nprobe: int | None = None,
         dense_enabled: bool = True,
+        phrase_enabled: bool = False,
     ) -> None:
         manifest_path = index_root / "retrieval.manifest.json"
         if not manifest_path.is_file():
@@ -889,6 +954,7 @@ class HybridSearcher:
         # to co-reside. On a memory-constrained host, disabling dense keeps the
         # searcher to the instant BM25 channels rather than paging to a halt.
         self.dense_enabled = dense_enabled
+        self.phrase_enabled = phrase_enabled
         self._model: Any = None
         self._dense: Any = None
         self._dense_map: sqlite3.Connection | None = None
@@ -997,7 +1063,8 @@ class HybridSearcher:
             item = pooled.setdefault(
                 row["chunk_id"],
                 {"row": row, "score": 0.0, "channels": set(), "dense_rank": None,
-                 "core_bm25_rank": None, "pubmed_bm25_rank": None},
+                 "core_bm25_rank": None, "pubmed_bm25_rank": None,
+                 "phrase_bm25_rank": None},
             )
             item["score"] += weight / (RRF_K + rank)
             item["channels"].add(channel)
@@ -1005,6 +1072,9 @@ class HybridSearcher:
 
         for rank, row in enumerate(sparse_search(self.core, query, candidate_k), 1):
             register(row, "core_bm25", "core_bm25_rank", rank, CORE_SPARSE_WEIGHT)
+        if self.phrase_enabled:
+            for rank, row in enumerate(phrase_search(self.core, query), 1):
+                register(row, "phrase_bm25", "phrase_bm25_rank", rank, PHRASE_WEIGHT)
         if self.pubmed is not None:
             for rank, row in enumerate(sparse_search(self.pubmed, query, candidate_k), 1):
                 register(row, "pubmed_bm25", "pubmed_bm25_rank", rank, pubmed_weight)
@@ -1032,6 +1102,7 @@ class HybridSearcher:
                 dense_rank=item["dense_rank"],
                 core_bm25_rank=item["core_bm25_rank"],
                 pubmed_bm25_rank=item["pubmed_bm25_rank"],
+                phrase_bm25_rank=item["phrase_bm25_rank"],
             )
             for item in ranked
         ]

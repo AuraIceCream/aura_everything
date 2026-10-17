@@ -33,6 +33,7 @@ from aura_bio.device import resolve_device
 from aura_bio.env import load_env
 from aura_bio.evaluation import all_questions, score_answer
 from aura_bio.evaluation.harness import SystemResult
+from aura_bio.evaluation.manifest import ensure_run_manifest
 from aura_bio.evaluation.scorer import QuestionScore
 from aura_bio.pipeline import AuraBioPipeline
 from aura_bio.routing import QueryRouter
@@ -79,7 +80,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=here / "results")
     parser.add_argument("--dense", action="store_true",
                         help="enable the dense channel (needs several GiB free RAM)")
+    parser.add_argument("--phrase-search", action="store_true",
+                        help="add exact adjacent content-word matches from the core index")
+    parser.add_argument("--accuracy-mode", choices=("standard", "robust"), default="standard",
+                        help="robust: query expansion, diverse evidence, verified candidate selection")
+    parser.add_argument("--draft-candidates", type=int, default=2,
+                        help="independent drafts in robust mode (1-5), followed by bounded revisions")
     parser.add_argument("--rerank", action="store_true", help="enable the cross-encoder reranker")
+    parser.add_argument("--no-compress-evidence", action="store_true",
+                        help="keep full selected passages at deep context levels; "
+                             "diagnostic ablation of question-overlap compression")
+    parser.add_argument("--revision-context", action="store_true",
+                        help="include the prior draft in standard-mode repairs; "
+                             "robust mode always includes it")
     parser.add_argument("--rerank-device", default="cpu",
                         help="device for the cross-encoder. Defaults to cpu: this card has "
                              "4 GiB and the LLM needs all of it, so putting the reranker on "
@@ -98,20 +111,49 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rules-router", action="store_true",
                         help="force the rule router even when a trained one exists, "
                              "so the ablation can attribute the difference")
+    parser.add_argument("--teaching-mode", choices=(
+        "direct_answer", "guided_explanation", "socratic", "exam",
+        "homework_support", "revision", "misconception_repair", "research", "teach_back",
+    ), help="override answer format while keeping all pipeline stages enabled")
+    parser.add_argument("--prompt-profile", choices=("standard", "compact"),
+                        default="standard", help="select generation prompt profile; "
+                                                 "compact is experimental for small models")
     parser.add_argument("--num-predict", type=int, default=1024,
                         help="generation token budget; must match run_baseline.py "
                              "for the two runs to be comparable")
+    parser.add_argument("--seed", type=int, help="Ollama sampling seed for matched experiments")
+    parser.add_argument("--num-gpu-layers", type=int, default=99,
+                        help="Ollama layer offload; lower values preserve VRAM when dense "
+                             "retrieval and the model share a small GPU")
     parser.add_argument("--num-ctx", type=int, default=8192,
                         help="context window. Larger is not free: if the model plus its "
                              "KV cache exceeds free VRAM, Ollama silently splits it onto "
                              "the CPU and generation slows several-fold. Check with "
                              "'ollama ps' that PROCESSOR reads 100%% GPU")
+    parser.add_argument("--unload-model-between-requests", action="store_true",
+                        help="ask Ollama to release model memory after each generation "
+                             "on memory-constrained hosts (slower, same pipeline stages)")
     parser.add_argument("--no-warm", action="store_true",
                         help="skip pulling the indexes into page cache first "
                              "(see warm_index.py for why that is expensive here)")
     parser.add_argument("--extractive", action="store_true",
                         help="answer from evidence without a model, to isolate retrieval")
     args = parser.parse_args(argv)
+
+    # Check provenance before warming indexes or loading any models.
+    tag = args.tag or f"{args.system}_{args.model.replace(':', '_')}"
+    results_path = args.out / f"{tag}.jsonl"
+    summary_path = args.out / f"{tag}.summary.json"
+    settings_path = args.out / f"{tag}.settings.json"
+    settings = {key: str(value) if isinstance(value, Path) else value
+                for key, value in vars(args).items()}
+    ensure_run_manifest(
+        settings_path, results_path, settings,
+        [here.parent / "src", here.parent.parent / "corpus_pipeline" / "src",
+         Path(__file__), here.parent / "pyproject.toml",
+         here.parent.parent / "corpus_pipeline" / "pyproject.toml"],
+        [path for path in (args.questions, args.ids_file) if path is not None],
+    )
 
     if not args.no_warm:
         from warm_index import warm_index
@@ -121,14 +163,19 @@ def main(argv: list[str] | None = None) -> int:
     from aura_bio_pipeline.retrieval import HybridSearcher
 
     searcher = HybridSearcher(
-        args.index_root, device=resolve_device(), dense_enabled=args.dense
+        args.index_root, device=resolve_device(), dense_enabled=args.dense,
+        phrase_enabled=args.phrase_search or args.accuracy_mode == "robust",
     )
 
     if args.extractive:
         generator, model_name = ExtractiveGenerator(), "extractive-no-model"
     else:
         ollama = OllamaGenerator(
-            model=args.model, num_predict=args.num_predict, num_ctx=args.num_ctx
+            model=args.model, num_predict=args.num_predict, num_ctx=args.num_ctx,
+            keep_alive=0 if args.unload_model_between_requests else None,
+            num_gpu=args.num_gpu_layers,
+            prompt_profile=args.prompt_profile,
+            seed=args.seed,
         )
         if not ollama.available():
             raise SystemExit(
@@ -174,12 +221,11 @@ def main(argv: list[str] | None = None) -> int:
         reranker=None if is_basic else reranker,
         critic=None if is_basic else critic,
         model_name=model_name,
+        compress_deep_evidence=not args.no_compress_evidence,
+        revision_context=args.revision_context,
+        accuracy_mode="standard" if is_basic else args.accuracy_mode,
+        draft_candidates=args.draft_candidates,
     )
-
-    tag = args.tag or f"{args.system}_{args.model.replace(':', '_')}"
-    args.out.mkdir(parents=True, exist_ok=True)
-    results_path = args.out / f"{tag}.jsonl"
-    summary_path = args.out / f"{tag}.summary.json"
 
     if args.questions:
         from aura_bio.evaluation.schema import read_jsonl
@@ -208,7 +254,8 @@ def main(argv: list[str] | None = None) -> int:
     todo = [q for q in questions if q.id not in done]
     print(
         f"system={args.system} model={model_name} dense={args.dense} rerank={args.rerank} "
-        f"critic={bool(critic)} | total={len(questions)} done={len(done)} remaining={len(todo)}",
+        f"critic={bool(critic)} accuracy_mode={pipeline.accuracy_mode} drafts={args.draft_candidates} "
+        f"| total={len(questions)} done={len(done)} remaining={len(todo)}",
         flush=True,
     )
 
@@ -222,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
                     # basic_rag must not revise: cap the loop at a single draft.
                     answer = pipeline.answer(
                         question.question,
+                        teaching_mode=args.teaching_mode,
                         use_critic=bool(critic) and not is_basic,
                     )
                     text = answer.text
@@ -249,6 +297,14 @@ def main(argv: list[str] | None = None) -> int:
                         },
                         "stage_ms": answer.trace.stage_ms,
                         "provenance": answer.trace.provenance,
+                        "accuracy_mode": pipeline.accuracy_mode,
+                        "selected_revision": answer.trace.selected_revision,
+                        "final_verification": answer.trace.final_verification,
+                        "queries": answer.trace.retrieval.get("queries", []),
+                        "calculations": answer.trace.retrieval.get("calculations", []),
+                        "calculation_rendered": answer.trace.retrieval.get("calculation_rendered", False),
+                        "revision_context": pipeline.revision_context,
+                        "candidate_records": answer.trace.revisions,
                         # Which checkers fired, so a regression can be
                         # attributed without re-deriving the evidence. Working
                         # out that NLI drove 18 of 50 revisions needed a full
@@ -355,7 +411,21 @@ def _write_summary(system: str, model: str, results_path: Path, summary_path: Pa
         system=f"{system}:{model}", scores=scores, latencies_ms=latencies, errors=errors,
         saturated_ids=frozenset(saturated),
     )
-    summary_path.write_text(json.dumps(result.aggregate(), indent=2), encoding="utf-8")
+    summary = result.aggregate()
+    candidates = [record for row in latest.values()
+                  for record in row.get("trace", {}).get("candidate_records", [])]
+    summary["reliability"] = {
+        "candidate_reviews": len(candidates),
+        "trusted_critic_reviews": sum(bool(record.get("critique", {}).get("trusted"))
+                                      for record in candidates if record.get("critique")),
+        "untrusted_critic_reviews": sum(not record["critique"].get("trusted", False)
+                                        for record in candidates if record.get("critique")),
+        "degraded_answers": sum(row.get("trace", {}).get("decision") == "degraded"
+                                for row in latest.values()),
+        "uncited_answers": sum(row.get("trace", {}).get("provenance", {}).get("claim_citation_rate", 0) == 0
+                               for row in latest.values()),
+    }
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":

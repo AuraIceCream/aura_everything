@@ -3,35 +3,12 @@
 Local-first React interface for evidence-grounded biology tutoring, hybrid
 retrieval inspection, structured pipeline traces, and corpus readiness.
 
-## Two modes: mock and live
+## Running it
 
-This app ships with **mocks enabled by default** so every route and streaming
-interaction works with no backend at all, which is useful for UI work and
-demos. Nothing in mock mode touches the real pipeline.
-
-| | `VITE_USE_MOCKS=true` (default) | `VITE_USE_MOCKS=false` |
-|---|---|---|
-| Data source | Mock Service Worker, canned responses | the real FastAPI backend |
-| Answer latency | instant | tens of seconds, it is really generating |
-| Citations | fixed sample passages | real retrieved passages |
-| Requires backend | no | yes |
-
-If answers appear instantly and never change, you are in mock mode.
-
-## Run against mocks
-
-```powershell
-cd frontend
-npm install
-npm run dev
-```
-
-Open `http://127.0.0.1:5173`.
-
-## Run against the real pipeline
-
-First start the backend (see the root [`README.md`](../README.md) for the full
-setup, including the index and the local model):
+The interface talks to the real backend only. There is no mock or demo mode:
+every page reads from the API, so start the backend first (see the root
+[`README.md`](../README.md) for the full setup, including the index and the
+local model).
 
 ```powershell
 # from the repository root, runtime installed
@@ -40,26 +17,39 @@ $env:AURA_RERANK = "1"
 aura-bio-api --index-root G:\aura_data\AURA-Bio-Index
 ```
 
-Then create `frontend/.env.local`:
-
-```ini
-VITE_API_BASE_URL=http://127.0.0.1:8000
-VITE_USE_MOCKS=false
-```
-
-Restart the dev server, because Vite only reads env files at startup:
+Then:
 
 ```powershell
+cd frontend
+npm install
 npm run dev
 ```
 
-Confirm it is live: the backend should log `POST /api/v1/runs` when you submit a
-question. `.env.local` is gitignored.
+Open `http://127.0.0.1:5173`. The API base defaults to
+`http://127.0.0.1:8000`; override it in `frontend/.env.local` (gitignored):
+
+```ini
+VITE_API_BASE_URL=http://127.0.0.1:8000
+```
+
+Vite reads env files only at startup, so restart the dev server after changing
+one.
+
+A real answer takes tens of seconds, because it is genuinely routing,
+retrieving, generating, and verifying. Panels with nothing to show say so
+rather than displaying sample content, so empty panels on a fresh backend are
+the correct state.
 
 The backend degrades gracefully. With no local model it answers extractively
 from evidence; with no dense index it serves the BM25 channels alone.
 
 ## Routes
+
+Study material supports explicit figure/OCR passes, upright manual crops and
+immutable interpretation/user-edit previews. Groq requires per-pack permission
+plus an exact crop/hint payload preview and job approval; no API keys enter the
+frontend. Figure/OCR answers are labelled interpreted/transcribed, not verified.
+See [visual setup and limits](../docs/study-packs.md#visual-passes-2026-10-07).
 
 - `/ask` — adaptive tutoring, streaming answers, citations, and evidence drawer
 - `/retrieval` — BM25, dense, hybrid, and reranked comparison
@@ -99,3 +89,19 @@ computed.
 
 A top-level error boundary wraps the app, so an unhandled render error shows a
 recoverable message instead of a blank page.
+
+## Ask with an image
+
+Attach PNG/JPEG, enter the question, optionally select saved study material,
+then click Ask once. Processing, indexing and answering show separate stages;
+upload/polling alone do not start inference. Inspect/crop the original in the
+existing figure controls. Choose OCR for text or the exact installed local
+vision model for diagrams. Busy/missing models stop visibly; inspect the job
+and resume explicitly. Hosted processing requires its own payload preview and
+approval, separate from private external-critic consent.
+
+Temporary images are stored locally for one hour by default, not just in memory.
+Save retains the same citation IDs without expiry; Detach never deletes saved
+material. Private runs stay out of browser archives. Described figures and OCR
+numbers remain interpreted/unverified. Real model quality has not been established
+by the frontend/fake-provider tests.

@@ -224,6 +224,36 @@ answer-side checker ships disabled and the question-side signal ships on.
 
 ---
 
+## 3b. Verification, not generation, dominated latency
+
+Timing a real request end to end put the cost somewhere nobody had guessed:
+
+| stage | time | share |
+|---|---:|---:|
+| routing | 0.2s | — |
+| retrieval | 2.6s | 1% |
+| rerank | 10.4s | 3% |
+| generation | 56.5s | 17% |
+| **verification** | **258.8s** | **79%** |
+
+Generation is the expensive-looking step and it was not the problem.
+`entail_claims` compares each claim against its highest-overlap passages, which
+means every pair carries a *different* premise. The scorer's only entry point
+took one premise and many hypotheses, so calling it per passage ran one forward
+pass per pair and `batch_size` never engaged: 18 claims × 4 passages was 72
+single-item forward passes at roughly 3.6s each.
+
+Restructuring the loop into rounds — round *r* scores every still-unsettled
+claim against its *r*-th passage, in one batch — preserves the original early
+exit (a claim stops as soon as one passage supports it) while letting every
+claim in a round share a forward pass. Measured **7.3x faster with byte-identical
+output**: same labels, same chunk ids, same probabilities to 1e-4.
+
+The general point is the same one this file keeps making: the slow component
+was not the one that looked slow, and only measuring per stage showed it.
+
+---
+
 ## 4. Method notes, including two mistakes worth recording
 
 **Benchmark leakage, twice.** Tuning a prompt against failing questions slid

@@ -1,74 +1,82 @@
-import { Activity, ChevronRight, CirclePause, CirclePlay, Cloud, Cpu, FlaskConical } from "lucide-react";
-import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Activity, ChevronRight, Cloud, FlaskConical } from "lucide-react";
 import { Link } from "react-router-dom";
-import { demoProcesses, demoRuns } from "../lib/mock-data";
-import type { ProcessSummary } from "../types";
+import { api } from "../lib/api";
 
+/**
+ * Recent activity, read from the backend.
+ *
+ * This panel previously rendered bundled sample runs and a simulated
+ * progress feed. It now shows what the system has actually answered in this
+ * session, so an empty panel truthfully means "nothing has been asked yet"
+ * rather than showing invented activity.
+ */
 export function ActivityCenter() {
-  const [processes, setProcesses] = useState(demoProcesses);
-  const activeCount = processes.filter((process) => process.status === "running").length;
+  const runs = useQuery({
+    queryKey: ["recent-runs"],
+    queryFn: () => api.recentRuns(8),
+    refetchInterval: 15_000,
+  });
 
-  function toggleProcess(processId: string) {
-    setProcesses((current) => current.map((process) => {
-      if (process.process_id !== processId || process.status === "queued" || process.status === "completed") return process;
-      return { ...process, status: process.status === "running" ? "paused" : "running" };
-    }));
-  }
+  const recent = runs.data?.runs ?? [];
+  const revised = recent.filter((run) => run.revised).length;
 
   return (
     <details className="activity-center">
-      <summary aria-label="Open demo runs and processes">
+      <summary aria-label="Open recent runs">
         <Activity size={15} />
-        <span>Demo activity</span>
-        <i>{activeCount}</i>
+        <span>Recent activity</span>
+        <i>{recent.length}</i>
       </summary>
       <div className="activity-popover">
         <header>
-          <div><span className="eyebrow">Simulation feed</span><h2>Runs &amp; processes</h2></div>
-          <span className="simulation-badge">Mock data</span>
+          <div>
+            <span className="eyebrow">This session</span>
+            <h2>Pipeline runs</h2>
+          </div>
+          <span className="simulation-badge">{runs.data?.total ?? 0} total</span>
         </header>
 
         <section className="activity-section">
-          <div className="activity-heading"><span>Processes</span><small>{activeCount} active</small></div>
-          <div className="process-list">
-            {processes.map((process) => <ProcessRow key={process.process_id} process={process} onToggle={() => toggleProcess(process.process_id)} />)}
+          <div className="activity-heading">
+            <span>Recent runs</span>
+            <small>{revised} revised</small>
           </div>
-        </section>
-
-        <section className="activity-section">
-          <div className="activity-heading"><span>Recent demo runs</span><small>{demoRuns.length} shown</small></div>
           <div className="recent-runs">
-            {demoRuns.map((run) => (
+            {runs.isLoading && <p className="activity-empty">Loading…</p>}
+            {runs.isError && (
+              <p className="activity-empty">Backend unreachable.</p>
+            )}
+            {!runs.isLoading && !runs.isError && recent.length === 0 && (
+              <p className="activity-empty">
+                No runs yet. Ask a question to populate this.
+              </p>
+            )}
+            {recent.map((run) => (
               <Link to={`/traces/${run.run_id}`} key={run.run_id}>
-                <span className="run-icon"><FlaskConical size={15} /></span>
-                <span className="run-copy"><strong>{run.query}</strong><small>{run.teaching_mode.replace("_", "-")} · {run.duration}{run.external_critic_used ? " · GLM reviewed" : " · on-device review"}</small></span>
+                <span className="run-icon">
+                  <FlaskConical size={15} />
+                </span>
+                <span className="run-copy">
+                  <strong>{run.query}</strong>
+                  <small>
+                    {(run.teaching_mode ?? "guided").replace("_", "-")} ·{" "}
+                    {(run.latency_ms / 1000).toFixed(1)}s ·{" "}
+                    {run.external_critic_used ? "GLM reviewed" : "on-device review"}
+                    {run.revised ? " · revised" : ""}
+                  </small>
+                </span>
                 <ChevronRight size={15} />
               </Link>
             ))}
           </div>
         </section>
 
-        <footer><Cloud size={14} /><span>Frontend simulation using the planned backend contract</span></footer>
+        <footer>
+          <Cloud size={14} />
+          <span>Live data from the local backend</span>
+        </footer>
       </div>
     </details>
-  );
-}
-
-function ProcessRow({ process, onToggle }: { process: ProcessSummary; onToggle: () => void }) {
-  const canToggle = process.status === "running" || process.status === "paused";
-  return (
-    <article className={`process-row process-row--${process.status}`}>
-      <div className="process-row__top">
-        <span className="process-icon"><Cpu size={15} /></span>
-        <span><strong>{process.label}</strong><small>{process.detail}</small></span>
-        <button type="button" disabled={!canToggle} onClick={onToggle} aria-label={`${process.status === "running" ? "Pause" : "Resume"} ${process.label}`}>
-          {process.status === "running" ? <CirclePause size={17} /> : <CirclePlay size={17} />}
-        </button>
-      </div>
-      <div className="process-progress" role="progressbar" aria-label={`${process.label} progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={process.progress}>
-        <span style={{ width: `${process.progress}%` }} />
-      </div>
-      <div className="process-row__meta"><span>{process.status}</span><small>{process.helper}</small><b>{process.progress}%</b></div>
-    </article>
   );
 }

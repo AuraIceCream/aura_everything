@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -25,6 +26,7 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from ..routing.schema import Route
+from ..verification.checkers import content_tokens
 from .schema import Critique, parse_critique
 
 CRITIC_SYSTEM = (
@@ -41,23 +43,70 @@ CRITIC_SYSTEM = (
 )
 
 
+def _critic_excerpt(text: str, query: str, answer: str, budget: int = 600) -> str:
+    """Select verbatim relevant sentences without changing source numbering.
+
+    Keep negations and units inside their sentence. Relevance is deterministic,
+    not a support judgement: a contradiction can rank just as highly as support.
+    Selected sentences retain source order; omissions are visibly marked.
+    """
+    if len(text) <= budget:
+        return text
+    # A single newline may only be a PDF/text line wrap, not a sentence end.
+    # Keep its qualifier attached; separate only paragraphs and explicit items.
+    blocks = re.split(r"\n\s*\n|\n(?=\s*(?:[-*•]|\d+[.)])\s+)", text)
+    sentences = [s.strip() for block in blocks
+                 for s in re.split(r"(?<=[.!?])\s+(?=[A-Z(])", " ".join(block.splitlines()))
+                 if s.strip()]
+    asked, claimed = content_tokens(query), content_tokens(answer)
+    scores = [(3 * len(asked & content_tokens(s)) + len(claimed & content_tokens(s)), i)
+              for i, s in enumerate(sentences)]
+    selected = []
+    seen = set()
+    remaining = budget - len("[Selected sentences; other text omitted]\n")
+    for score, index in sorted(scores, key=lambda item: (-item[0], item[1])):
+        sentence = sentences[index]
+        if score <= 0 or sentence in seen or len(sentence) + 1 > remaining:
+            continue
+        selected.append(index)
+        seen.add(sentence)
+        remaining -= len(sentence) + 1
+    if selected:
+        return "[Selected sentences; other text omitted]\n" + "\n".join(sentences[i] for i in sorted(selected))
+    marker = "\n[Excerpt clipped; remaining text omitted]"
+    return text[:budget - len(marker)].rstrip() + marker
+
+
 def build_critic_prompt(route: Route, answer: str, evidence: Sequence[Any]) -> str:
+    if getattr(route, 'evidence_scope', 'core') == 'pack_only':
+        return json.dumps({'question': route.query, 'learner_level': route.learner_level.label,
+                           'style': route.teaching_mode.label, 'untrusted_draft': answer,
+                           'untrusted_evidence': [{'citation': i, 'title': getattr(item, 'title', ''),
+                            'excerpt': _critic_excerpt(getattr(item, 'text', ''), route.query, answer)}
+                            for i, item in enumerate(evidence, 1)]}, ensure_ascii=False)
     lines = [
         f"Question: {route.query}",
         f"Intended learner level: {route.learner_level.label}.",
         f"Teaching mode: {route.teaching_mode.label}.",
         "",
-        "Numbered evidence the answer was allowed to use:",
+        "Numbered evidence the answer was allowed to use (excerpts may omit text):",
     ]
     if evidence:
         for index, item in enumerate(evidence, 1):
             title = getattr(item, "title", "") or ""
-            text = (getattr(item, "text", "") or "")[:600]
+            text = _critic_excerpt(getattr(item, "text", "") or "", route.query, answer)
             lines.append(f"[{index}] {title}\n{text}")
     else:
         lines.append("(no evidence was retrieved)")
     lines += ["", "Answer to review:", answer, "", "Return only the JSON object."]
     return "\n".join(lines)
+
+
+def critic_system(route):
+    if getattr(route, 'evidence_scope', 'core') == 'pack_only':
+        from ..study.prompts import STUDY_CRITIC_SYSTEM
+        return STUDY_CRITIC_SYSTEM
+    return CRITIC_SYSTEM
 
 
 @dataclass(slots=True)
@@ -158,7 +207,7 @@ class GLMCritic:
                     "thinking": {"type": "disabled"},
                     "response_format": {"type": "json_object"},
                     "messages": [
-                        {"role": "system", "content": CRITIC_SYSTEM},
+                        {"role": "system", "content": critic_system(route)},
                         {"role": "user", "content": build_critic_prompt(route, answer, evidence)},
                     ],
                 },
@@ -167,7 +216,9 @@ class GLMCritic:
             )
         except Exception as exc:
             elapsed = (time.perf_counter() - started) * 1000
-            return CriticResult(parse_critique("", self.name), elapsed, None, None, "", str(exc))
+            return CriticResult(Critique(False, decision="revise", model=self.name,
+                                        trusted=False, failure_kind=type(exc).__name__),
+                                elapsed, None, None, "", str(exc))
         elapsed = (time.perf_counter() - started) * 1000
         content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
         usage = body.get("usage", {})
@@ -204,7 +255,7 @@ class GeminiCritic:
             body = _post_json(
                 url,
                 {
-                    "systemInstruction": {"parts": [{"text": CRITIC_SYSTEM}]},
+                    "systemInstruction": {"parts": [{"text": critic_system(route)}]},
                     "contents": [
                         {"role": "user", "parts": [{"text": build_critic_prompt(route, answer, evidence)}]}
                     ],
@@ -219,7 +270,9 @@ class GeminiCritic:
             )
         except Exception as exc:
             elapsed = (time.perf_counter() - started) * 1000
-            return CriticResult(parse_critique("", self.name), elapsed, None, None, "", str(exc))
+            return CriticResult(Critique(False, decision="revise", model=self.name,
+                                        trusted=False, failure_kind=type(exc).__name__),
+                                elapsed, None, None, "", str(exc))
         elapsed = (time.perf_counter() - started) * 1000
         content = ""
         candidates = body.get("candidates", [])

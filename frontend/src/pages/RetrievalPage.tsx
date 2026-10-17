@@ -6,6 +6,7 @@ import { api } from "../lib/api";
 import type { RetrievalMode, RetrievalResult } from "../types";
 import { PageHeader, StatusPill } from "../components/ui";
 import { useSettings } from "../context/settings";
+import { CorpusSection } from "./CorpusPage";
 
 const modes: { value: RetrievalMode; label: string; helper: string }[] = [
   { value: "bm25", label: "BM25", helper: "Exact terminology" },
@@ -24,7 +25,7 @@ export function RetrievalPage() {
 
   return (
     <div className="page-stack">
-      <PageHeader eyebrow="Retrieval laboratory" title="See why evidence was selected" description="Compare lexical and semantic retrieval using the same query, filters, and corpus." action={<StatusPill tone="warning">Partial index · pilot coverage</StatusPill>} />
+      <PageHeader eyebrow="Retrieval and corpus" title="See why evidence was selected" description="Compare lexical and semantic retrieval on the same query, then inspect the corpus those results are drawn from." action={<StatusPill tone="warning">Partial index · pilot coverage</StatusPill>} />
       <section className="query-panel">
         <div className="search-field"><Search size={18} /><label htmlFor="retrieval-query" className="sr-only">Retrieval query</label><input id="retrieval-query" value={query} onChange={(event) => setQuery(event.target.value)} /><button onClick={() => search.mutate()} disabled={!query.trim() || search.isPending}>{search.isPending ? "Searching…" : "Run comparison"}<ArrowRight size={15} /></button></div>
         <div className="filter-row"><Filter size={15} /><span>Source family</span><select value={sourceType} onChange={(event) => setSourceType(event.target.value)}><option value="">All licensed sources</option><option value="textbook">Textbooks</option><option value="research paper">Research papers</option><option value="encyclopedia">Reference</option></select><span className="filter-summary">Top 10 · 50 candidates · RRF k=60</span></div>
@@ -52,6 +53,8 @@ export function RetrievalPage() {
           </aside>
         </div>
       )}
+
+      <CorpusSection />
     </div>
   );
 }

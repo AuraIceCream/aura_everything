@@ -3,12 +3,18 @@ import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis
 import { AlertTriangle, Calculator, GitCompareArrows, ListOrdered, Target } from "lucide-react";
 import { api } from "../lib/api";
 import { Metric, PageHeader, StatusPill } from "../components/ui";
+import { FailureReviewPanel, TeachingQualityPanel } from "../components/quality-panels";
 import type { EvaluationSummary } from "../types";
 
 const label = (key: string) => key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 export function EvaluationPage() {
   const summary = useQuery({ queryKey: ["evaluation-summary"], queryFn: api.evaluationSummary });
+  const runs = useQuery({
+    queryKey: ["recent-runs", "evaluation"],
+    queryFn: () => api.recentRuns(50),
+    refetchInterval: 20_000,
+  });
 
   return (
     <div className="page-stack">
@@ -18,6 +24,8 @@ export function EvaluationPage() {
         description="A curated biology question set for comparing the baseline model, basic RAG, the full pipeline, and the finetuned system on the same questions."
         action={<StatusPill tone="info">Deterministic grading</StatusPill>}
       />
+      <TeachingQualityPanel runs={runs.data?.runs ?? []} />
+      <FailureReviewPanel runs={runs.data?.runs ?? []} />
       {summary.data && <EvaluationBody data={summary.data} />}
     </div>
   );

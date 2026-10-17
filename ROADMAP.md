@@ -1,5 +1,11 @@
 # AURA-Bio — status and next steps
 
+> Historical status snapshot (2026-07-27). Its benchmark projections and
+> 0.375 hallucination figure were superseded by the measured analysis in
+> [`FINDINGS.md`](aura_bio_system/benchmarks/FINDINGS.md). See the
+> [evaluation and expansion plan](docs/EVALUATION_AND_EXPANSION.md) for the
+> proposed matched, two-model study.
+
 Companion to [`SUMMARY.md`](SUMMARY.md). Phase numbers refer to
 [`srs.md`](srs.md) §29.
 
